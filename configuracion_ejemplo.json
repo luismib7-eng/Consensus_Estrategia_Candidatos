@@ -1,0 +1,90 @@
+{
+  "elecciones": [
+    {
+      "eleccion_id": "JAL-MUN-TONALA-2027",
+      "cargo": "Presidencia Municipal",
+      "fecha_jornada": "2027-06-06",
+      "fecha_corte": "2026-09-15",
+      "territorio": {
+        "entidad": "Jalisco",
+        "municipio": "Tonalá",
+        "distrito": null,
+        "geojson_url": "./cartografia/tonala_secciones.geojson"
+      },
+      "candidato": {
+        "nombre": "Nombre de la candidatura",
+        "coalicion": "Coalición municipal",
+        "partidos": ["PAN", "PRI", "PRD"],
+        "tope_gastos_campana_mxn": 3150000
+      },
+      "parametros": {
+        "abstencion_estimada_pct": 52.0,
+        "margen_seguridad_pct": 3.0,
+        "umbral_swing_pct": 6.0,
+        "umbral_margen_competido_pct": 5.0,
+        "factor_recencia": 1.25
+      },
+      "fuentes": [
+        {
+          "anio": 2018,
+          "ruta": "datos/iepc_ayuntamientos_2018.csv",
+          "mapeo": "IEPC_JALISCO",
+          "coalicion": ["PAN", "PRI", "PRD"],
+          "filtro_columna": "MUNICIPIO",
+          "filtro_valor": "TONALA"
+        },
+        {
+          "anio": 2021,
+          "ruta": "datos/iepc_ayuntamientos_2021.csv",
+          "mapeo": "IEPC_JALISCO",
+          "coalicion": ["PAN", "PRI", "PRD"],
+          "filtro_columna": "MUNICIPIO",
+          "filtro_valor": "TONALA"
+        },
+        {
+          "anio": 2024,
+          "ruta": "datos/iepc_ayuntamientos_2024.csv",
+          "mapeo": "IEPC_JALISCO",
+          "coalicion": ["PAN", "PRI", "PRD"],
+          "filtro_columna": "MUNICIPIO",
+          "filtro_valor": "TONALA"
+        }
+      ],
+      "redes": {
+        "pagina_id": "1234567890",
+        "termino_busqueda": "Nombre de la candidatura",
+        "pais": "MX",
+        "dias_serie": 30,
+        "audiencia_inicial": 78000,
+        "kpis": {
+          "sentimiento_positivo_pct": 61.0,
+          "sentimiento_negativo_pct": 22.5
+        },
+        "competidores": [
+          {
+            "nombre": "Contendiente A",
+            "coalicion": "Partido en el gobierno",
+            "audiencia": 96000,
+            "engagement_rate": 5.1,
+            "gasto_ads_mxn": 410000,
+            "nfs": 12.4
+          },
+          {
+            "nombre": "Contendiente B",
+            "coalicion": "Coalición opositora",
+            "audiencia": 44000,
+            "engagement_rate": 3.2,
+            "gasto_ads_mxn": 180000,
+            "nfs": -6.8
+          }
+        ],
+        "topicos": [
+          { "tema": "Inseguridad", "menciones": 1840, "nfs": -31.5, "tendencia": "al alza" },
+          { "tema": "Agua y drenaje", "menciones": 1120, "nfs": -18.2, "tendencia": "estable" },
+          { "tema": "Servicios públicos", "menciones": 860, "nfs": 4.1, "tendencia": "a la baja" },
+          { "tema": "Imagen pública", "menciones": 1310, "nfs": 22.7, "tendencia": "al alza" }
+        ]
+      }
+    }
+  ]
+}

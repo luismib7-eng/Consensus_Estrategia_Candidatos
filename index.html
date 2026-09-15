@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plataforma Electoral · Consensus Estrategia</title>
+<meta name="description" content="Tablero de inteligencia electoral y digital por sección: fuerza territorial, secciones competidas, metas de movilización y desempeño en redes.">
+<meta name="color-scheme" content="dark">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Tailwind resuelve la retícula y el espaciado; el color y la tipografía
+  // viven en estilos.css para que el tablero pueda re-marcarse por cliente.
+  tailwind.config = { corePlugins: { preflight: false } };
+</script>
+<link rel="stylesheet" href="estilos.css">
+</head>
+
+<body>
+
+<!-- ============================ Barra de marca ============================ -->
+<header class="contenedor flex flex-wrap items-center justify-between gap-4 pt-6 pb-5">
+  <div class="marca">
+    <!-- Sustituir por el emblema de Consensus Estrategia:
+         <img src="emblema.svg" alt="Consensus Estrategia" class="marca-emblema"> -->
+    <div class="marca-emblema" aria-hidden="true">CE</div>
+    <div>
+      <p class="marca-nombre display">Consensus Estrategia</p>
+      <p class="marca-linea">Inteligencia de datos y análisis electoral</p>
+    </div>
+  </div>
+
+  <div class="text-right">
+    <p id="contexto-eleccion" class="text-sm" style="color: var(--texto-medio);">Cargando elección</p>
+    <p id="contexto-corte" class="marca-linea">Corte pendiente</p>
+  </div>
+</header>
+
+<!-- ============================ Estado de carga ============================ -->
+<div class="contenedor">
+  <div id="estado-carga" class="panel estado">
+    <h2 class="panel-titulo">Preparando el tablero</h2>
+    <p>Leyendo <code>electoral_master_data.json</code>.</p>
+  </div>
+</div>
+
+<!-- ============================== Tablero ================================= -->
+<main id="tablero" class="contenedor" hidden>
+
+  <!-- Selectores: un mismo tablero sirve a cualquier cargo y territorio -->
+  <section class="panel p-5 grid gap-4 md:grid-cols-4" aria-label="Selección de elección">
+    <label class="control">
+      <span class="control-etiqueta">Cargo en disputa</span>
+      <select id="selector-cargo" class="campo"></select>
+    </label>
+    <label class="control">
+      <span class="control-etiqueta">Municipio o distrito</span>
+      <select id="selector-territorio" class="campo"></select>
+    </label>
+    <label class="control">
+      <span class="control-etiqueta">Coalición o partido</span>
+      <select id="selector-coalicion" class="campo"></select>
+    </label>
+    <label class="control">
+      <span class="control-etiqueta">Fecha de corte</span>
+      <input id="campo-corte" type="date" class="campo">
+    </label>
+  </section>
+
+  <!-- Hero: la meta de votos y la brecha que falta por movilizar -->
+  <section class="hero mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] lg:items-center"
+           aria-label="Meta de votos">
+    <div>
+      <p class="hero-cifra cifra" id="hero-meta">0</p>
+      <p class="hero-sub mt-3" id="hero-sub">Calculando la meta de movilización.</p>
+    </div>
+
+    <div>
+      <div class="riel" role="img" aria-labelledby="leyenda-duro leyenda-brecha leyenda-meta">
+        <div class="riel-duro" id="riel-duro"></div>
+        <div class="riel-brecha" id="riel-brecha"></div>
+        <div class="riel-marca" id="riel-marca"></div>
+      </div>
+      <div class="riel-leyenda">
+        <span><i class="muestra" style="background: var(--oro);"></i><em id="leyenda-duro" class="not-italic">Voto duro</em></span>
+        <span><i class="muestra" style="background: rgba(63,210,226,0.35);"></i><em id="leyenda-brecha" class="not-italic">Brecha</em></span>
+        <span><i class="muestra" style="background: var(--texto);"></i><em id="leyenda-meta" class="not-italic">Meta</em></span>
+      </div>
+
+      <dl class="grid grid-cols-3 gap-4 mt-5">
+        <div>
+          <dd class="cifra text-xl" id="hero-secciones">0</dd>
+          <dt class="marca-linea">Secciones del territorio</dt>
+        </div>
+        <div>
+          <dd class="cifra text-xl" id="hero-cobertura" style="color: var(--swing);">0</dd>
+          <dt class="marca-linea">Secciones prioritarias</dt>
+        </div>
+        <div>
+          <dd class="cifra text-xl" id="hero-jornada">—</dd>
+          <dt class="marca-linea">Jornada electoral</dt>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- Tarjetas de KPI -->
+  <section id="kpis" class="grid gap-4 mt-5 sm:grid-cols-2 xl:grid-cols-4"
+           aria-label="Indicadores de alto impacto"></section>
+
+  <!-- Territorio: cartografía y tabla seccional -->
+  <section class="grid gap-4 mt-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]"
+           aria-label="Análisis territorial">
+
+    <article class="panel">
+      <div class="panel-cabeza flex-wrap">
+        <div>
+          <h2 class="panel-titulo">Secciones electorales</h2>
+          <p class="panel-nota" id="conteo-secciones">Cargando secciones</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input id="buscador-seccion" type="search" class="campo" style="width: 150px;"
+                 placeholder="Buscar sección" aria-label="Buscar sección electoral">
+          <button id="boton-exportar" type="button" class="boton">Exportar CSV</button>
+        </div>
+      </div>
+
+      <div id="filtros-seccion" class="flex flex-wrap gap-2 px-5 py-4"></div>
+
+      <div class="tabla-envoltura">
+        <table class="seccional">
+          <thead><tr id="tabla-encabezado"></tr></thead>
+          <tbody id="tabla-cuerpo"></tbody>
+        </table>
+      </div>
+
+      <div id="detalle-seccion" class="detalle"></div>
+    </article>
+
+    <article class="panel flex flex-col">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Mapa competitivo</h2>
+      </div>
+      <div id="lienzo-territorial" class="flex-1"></div>
+      <p class="panel-nota px-5 pb-5" id="nota-cartografia"></p>
+    </article>
+  </section>
+
+  <!-- Estrategia digital y escucha de redes -->
+  <section class="grid gap-4 mt-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]"
+           aria-label="Estrategia digital">
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Engagement contra gasto en pauta</h2>
+        <p class="panel-nota">Meta Ad Library y Page Insights</p>
+      </div>
+      <div class="px-5 py-5" style="height: 320px;">
+        <canvas id="grafica-competidores" aria-label="Comparativo de gasto en pauta y engagement entre contendientes"></canvas>
+      </div>
+
+      <div class="panel-cabeza" style="border-top: 1px solid var(--linea-suave);">
+        <h2 class="panel-titulo">Trayectoria de audiencia y pauta</h2>
+        <p class="panel-nota">Serie diaria hasta la fecha de corte</p>
+      </div>
+      <div class="px-5 py-5" style="height: 280px;">
+        <canvas id="grafica-trayectoria" aria-label="Audiencia acumulada y gasto diario en pauta"></canvas>
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Tópicos de conversación</h2>
+        <p class="panel-nota">Favorabilidad neta</p>
+      </div>
+      <div id="topicos"></div>
+    </article>
+  </section>
+
+</main>
+
+<footer class="contenedor pie flex flex-wrap items-center justify-between gap-3">
+  <p>Elaboración: Consensus Estrategia — Inteligencia de Datos y Análisis Electoral</p>
+  <p id="pie-version"></p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="tablero_core.js"></script>
+<script>
+  // Origen de datos intercambiable por cliente: basta con apuntar a otro
+  // archivo, a un endpoint del backend o a un objeto ya cargado en memoria.
+  Tablero.crear({ fuente: './electoral_master_data.json' });
+</script>
+
+</body>
+</html>
