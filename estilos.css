@@ -519,3 +519,252 @@ table.seccional tbody tr.activa td { background: rgba(216, 169, 59, 0.10); }
   background: var(--linea);
   border-radius: 999px;
 }
+
+
+/* ---------- Benchmark competitivo ---------- */
+
+table.comparativa { font-size: 12.5px; }
+
+table.comparativa tbody td { white-space: nowrap; }
+
+table.comparativa tbody tr.actor-propio td {
+  background: rgba(216, 169, 59, 0.08);
+  color: var(--texto);
+}
+
+table.comparativa tbody tr.actor-propio td:first-child {
+  border-left: 2px solid var(--oro);
+}
+
+.actor-nombre { display: block; color: var(--texto); font-weight: 600; }
+.actor-coalicion { display: block; font-size: 11px; color: var(--texto-tenue); font-weight: 400; }
+
+table.comparativa td.lidera { color: var(--cian); font-weight: 600; }
+
+/* ---------- Mapa de calor de mejores horas ---------- */
+
+.calor {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(9px, 1fr));
+  gap: 2px;
+  align-items: center;
+  padding: 16px 20px 0;
+  overflow-x: auto;
+}
+
+.calor-esquina { height: 14px; }
+
+.calor-hora {
+  font-size: 9.5px;
+  color: var(--texto-tenue);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.calor-dia {
+  font-size: 10.5px;
+  color: var(--texto-tenue);
+  padding-right: 6px;
+}
+
+.calor-celda {
+  aspect-ratio: 1;
+  min-height: 11px;
+  border-radius: 2px;
+}
+
+.franjas {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 20px;
+  display: grid;
+  gap: 2px;
+}
+
+.franjas li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--linea-suave);
+  font-size: 13px;
+}
+
+.franjas li:last-child { border-bottom: 0; }
+
+.franja-hora { color: var(--texto-medio); }
+.franja-tasa { color: var(--cian); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---------- Alertas tempranas ---------- */
+
+.alerta {
+  border: 1px solid var(--linea);
+  border-left-width: 3px;
+  border-radius: var(--radio-chico);
+  padding: 12px 14px;
+  background: var(--pizarra-alta);
+}
+
+.alerta-alta { border-left-color: var(--riesgo); }
+.alerta-media { border-left-color: var(--swing); }
+.alerta-baja { border-left-color: var(--texto-tenue); }
+
+.alerta-cabeza {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--texto-tenue);
+}
+
+.alerta-alta .alerta-tipo { color: var(--riesgo); font-weight: 600; }
+.alerta-media .alerta-tipo { color: var(--swing); font-weight: 600; }
+
+.alerta-titulo { font-size: 13.5px; margin: 5px 0 7px; color: var(--texto); }
+
+.alerta-evidencia {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--texto-medio);
+}
+
+.alerta-evidencia li { padding-left: 12px; position: relative; }
+
+.alerta-evidencia li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--linea);
+}
+
+@media (max-width: 860px) {
+  .calor { grid-template-columns: 26px repeat(24, 11px); }
+  table.comparativa { font-size: 11.5px; }
+}
+
+
+/* ---------- Etiquetas de formato y de tema pautado ---------- */
+
+.etiqueta-formato {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--cian);
+  background: var(--cian-tenue);
+  border: 1px solid rgba(63, 210, 226, 0.32);
+}
+
+td.temas { white-space: normal; text-align: left; }
+
+.etiqueta-tema {
+  display: inline-block;
+  margin: 1px 4px 1px 0;
+  padding: 1px 8px;
+  border-radius: var(--radio-chico);
+  font-size: 11px;
+  color: var(--texto-medio);
+  background: var(--pizarra-alta);
+  border: 1px solid var(--linea);
+}
+
+/* ---------- Franjas operativas del día ---------- */
+
+.tira-franjas {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 16px 20px 0;
+}
+
+.franja-bloque {
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-chico);
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+  background: var(--pizarra-alta);
+}
+
+.franja-bloque b { font-size: 19px; color: var(--texto); }
+.franja-nombre { font-size: 12px; color: var(--texto-medio); }
+.franja-rango { font-size: 10.5px; color: var(--texto-tenue); }
+
+.franja-mejor {
+  border-color: rgba(63, 210, 226, 0.45);
+  background: var(--cian-tenue);
+}
+
+.franja-mejor b { color: var(--cian); }
+
+/* ---------- Reporte ejecutivo impreso ---------- */
+
+.solo-impresion { display: none; }
+
+@media print {
+  @page { margin: 14mm; }
+
+  /* En papel el fondo oscuro se vuelve ilegible y consume tinta. */
+  :root {
+    --tinta: #ffffff;
+    --pizarra: #ffffff;
+    --pizarra-alta: #f4f6fa;
+    --linea: #c6cede;
+    --linea-suave: #dde2ec;
+    --texto: #12192a;
+    --texto-medio: #3d4a63;
+    --texto-tenue: #66748e;
+    --oro: #9a7412;
+    --cian: #10707d;
+  }
+
+  body { background: #ffffff !important; font-size: 10.5pt; }
+
+  .solo-impresion {
+    display: block;
+    border-bottom: 2px solid var(--oro);
+    padding: 0 0 8px;
+    margin-bottom: 14px;
+  }
+
+  #encabezado-impresion { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 12pt; }
+  #resumen-impresion { color: var(--texto-medio); font-size: 10pt; margin-top: 4px; }
+
+  .no-imprimir,
+  #selector-municipio-rapido,
+  #buscador-seccion,
+  #filtros-seccion,
+  .mosaico,
+  #estado-carga { display: none !important; }
+
+  .campo { border: 0; padding-left: 0; background-image: none; color: var(--texto); }
+
+  .panel, .hero, .kpi {
+    border-color: var(--linea-suave);
+    box-shadow: none;
+    break-inside: avoid;
+  }
+
+  section { break-inside: avoid; }
+
+  /* La tabla seccional se imprime completa, sin el marco con desplazamiento. */
+  body.imprimiendo .tabla-envoltura { max-height: none; overflow: visible; }
+
+  .riel-brecha {
+    background-image: repeating-linear-gradient(115deg,
+      rgba(16, 112, 125, 0.35) 0 7px, rgba(16, 112, 125, 0.10) 7px 14px);
+  }
+
+  table.seccional thead th { position: static; }
+  table.seccional tbody tr { break-inside: avoid; }
+
+  .pie { border-top: 1px solid var(--linea-suave); }
+}

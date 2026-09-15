@@ -14,7 +14,11 @@
       "candidato": {
         "nombre": "Nombre de la candidatura",
         "coalicion": "Coalición municipal",
-        "partidos": ["PAN", "PRI", "PRD"],
+        "partidos": [
+          "PAN",
+          "PRI",
+          "PRD"
+        ],
         "tope_gastos_campana_mxn": 3150000
       },
       "parametros": {
@@ -29,7 +33,11 @@
           "anio": 2018,
           "ruta": "datos/iepc_ayuntamientos_2018.csv",
           "mapeo": "IEPC_JALISCO",
-          "coalicion": ["PAN", "PRI", "PRD"],
+          "coalicion": [
+            "PAN",
+            "PRI",
+            "PRD"
+          ],
           "filtro_columna": "MUNICIPIO",
           "filtro_valor": "TONALA"
         },
@@ -37,7 +45,11 @@
           "anio": 2021,
           "ruta": "datos/iepc_ayuntamientos_2021.csv",
           "mapeo": "IEPC_JALISCO",
-          "coalicion": ["PAN", "PRI", "PRD"],
+          "coalicion": [
+            "PAN",
+            "PRI",
+            "PRD"
+          ],
           "filtro_columna": "MUNICIPIO",
           "filtro_valor": "TONALA"
         },
@@ -45,7 +57,11 @@
           "anio": 2024,
           "ruta": "datos/iepc_ayuntamientos_2024.csv",
           "mapeo": "IEPC_JALISCO",
-          "coalicion": ["PAN", "PRI", "PRD"],
+          "coalicion": [
+            "PAN",
+            "PRI",
+            "PRD"
+          ],
           "filtro_columna": "MUNICIPIO",
           "filtro_valor": "TONALA"
         }
@@ -67,7 +83,12 @@
             "audiencia": 96000,
             "engagement_rate": 5.1,
             "gasto_ads_mxn": 410000,
-            "nfs": 12.4
+            "nfs": 12.4,
+            "crecimiento_7d": 1200,
+            "publicaciones_7d": 26,
+            "interacciones_7d": 4320,
+            "menciones_30d": 3400,
+            "alcance_30d": 2400000
           },
           {
             "nombre": "Contendiente B",
@@ -75,16 +96,82 @@
             "audiencia": 44000,
             "engagement_rate": 3.2,
             "gasto_ads_mxn": 180000,
-            "nfs": -6.8
+            "nfs": -6.8,
+            "crecimiento_7d": 1200,
+            "publicaciones_7d": 26,
+            "interacciones_7d": 1980,
+            "menciones_30d": 3400,
+            "alcance_30d": 2400000
           }
         ],
         "topicos": [
-          { "tema": "Inseguridad", "menciones": 1840, "nfs": -31.5, "tendencia": "al alza" },
-          { "tema": "Agua y drenaje", "menciones": 1120, "nfs": -18.2, "tendencia": "estable" },
-          { "tema": "Servicios públicos", "menciones": 860, "nfs": 4.1, "tendencia": "a la baja" },
-          { "tema": "Imagen pública", "menciones": 1310, "nfs": 22.7, "tendencia": "al alza" }
+          {
+            "tema": "Inseguridad",
+            "menciones": 1840,
+            "nfs": -31.5,
+            "tendencia": "al alza",
+            "cuentas_nuevas_pct": 44.0,
+            "serie_negativas": "Serie diaria de menciones negativas (una entrada por dia de la ventana). El detector de anomalias la usa para encontrar picos atipicos."
+          },
+          {
+            "tema": "Agua y drenaje",
+            "menciones": 1120,
+            "nfs": -18.2,
+            "tendencia": "estable",
+            "cuentas_nuevas_pct": 12.5,
+            "serie_negativas": "Serie diaria de menciones negativas (una entrada por dia de la ventana). El detector de anomalias la usa para encontrar picos atipicos."
+          },
+          {
+            "tema": "Servicios públicos",
+            "menciones": 860,
+            "nfs": 4.1,
+            "tendencia": "a la baja",
+            "cuentas_nuevas_pct": 12.5,
+            "serie_negativas": "Serie diaria de menciones negativas (una entrada por dia de la ventana). El detector de anomalias la usa para encontrar picos atipicos."
+          },
+          {
+            "tema": "Imagen pública",
+            "menciones": 1310,
+            "nfs": 22.7,
+            "tendencia": "al alza",
+            "cuentas_nuevas_pct": 12.5,
+            "serie_negativas": "Serie diaria de menciones negativas (una entrada por dia de la ventana). El detector de anomalias la usa para encontrar picos atipicos."
+          }
+        ],
+        "publicaciones_7d": 22,
+        "interacciones_7d": 4100,
+        "publicaciones": [
+          {
+            "dia": 1,
+            "hora": 9,
+            "alcance": 18400,
+            "interacciones": 742,
+            "formato": "reel"
+          },
+          {
+            "dia": 1,
+            "hora": 20,
+            "alcance": 22100,
+            "interacciones": 1096,
+            "formato": "carrusel"
+          },
+          {
+            "dia": 4,
+            "hora": 21,
+            "alcance": 26500,
+            "interacciones": 1380,
+            "formato": "reel"
+          },
+          {
+            "dia": 6,
+            "hora": 12,
+            "alcance": 14200,
+            "interacciones": 498,
+            "formato": "foto"
+          }
         ]
-      }
+      },
+      "devengado_sif_mxn": 1980000
     }
   ]
 }

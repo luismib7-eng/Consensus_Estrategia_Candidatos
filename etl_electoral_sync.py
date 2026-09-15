@@ -57,7 +57,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-VERSION_ESQUEMA = "1.0"
+VERSION_ESQUEMA = "1.1"
 GRAPH_API_VERSION = "v21.0"
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
@@ -719,6 +719,353 @@ def calcula_nfs(positivos_pct: float, negativos_pct: float) -> float:
 
 
 # =====================================================================
+# 5.b INTELIGENCIA DIGITAL COMPETITIVA
+#     Benchmark entre actores, ventanas horarias de publicacion y
+#     deteccion de anomalias de conversacion (ataque coordinado).
+# =====================================================================
+
+def calcula_engagement_rate(interacciones: float, seguidores: float) -> float:
+    """(Interacciones / Seguidores) x 100. Es la tasa real, no la que reporta
+    la plataforma sobre alcance, que infla el dato en cuentas pequenas."""
+    if not seguidores:
+        return 0.0
+    return redondea(interacciones / seguidores * 100.0)
+
+
+def calcula_share_of_voice(menciones_por_actor: Dict[str, float]) -> Dict[str, float]:
+    """Reparto porcentual de la conversacion municipal entre los actores."""
+    total = sum(max(v, 0.0) for v in menciones_por_actor.values())
+    if not total:
+        return {actor: 0.0 for actor in menciones_por_actor}
+    return {
+        actor: redondea(max(valor, 0.0) / total * 100.0)
+        for actor, valor in menciones_por_actor.items()
+    }
+
+
+def costo_por_mil_alcanzados(gasto_mxn: float, alcance: float) -> float:
+    """CPM territorial: cuanto cuesta alcanzar a mil personas del municipio."""
+    if not alcance:
+        return 0.0
+    return redondea(gasto_mxn / (alcance / 1000.0), 2)
+
+
+def construye_benchmark(actores: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normaliza a los actores en una sola tabla comparable.
+
+    Cada actor entra con: nombre, coalicion, es_propio, seguidores,
+    crecimiento_7d, interacciones_7d, publicaciones_7d, menciones_30d,
+    gasto_ads_30d_mxn y alcance_30d. Se derivan engagement rate, share of
+    voice, CPM e interacciones por publicacion, y se ordena por share of voice.
+    """
+    menciones = {a["nombre"]: a.get("menciones_30d", 0.0) for a in actores}
+    reparto = calcula_share_of_voice(menciones)
+
+    tabla: List[Dict[str, Any]] = []
+    for actor in actores:
+        seguidores = float(actor.get("seguidores", 0) or 0)
+        crecimiento = float(actor.get("crecimiento_7d", 0) or 0)
+        interacciones = float(actor.get("interacciones_7d", 0) or 0)
+        publicaciones = float(actor.get("publicaciones_7d", 0) or 0)
+        gasto = float(actor.get("gasto_ads_30d_mxn", 0) or 0)
+        alcance = float(actor.get("alcance_30d", 0) or 0)
+
+        tabla.append({
+            "nombre": actor["nombre"],
+            "coalicion": actor.get("coalicion", ""),
+            "es_propio": bool(actor.get("es_propio")),
+            "seguidores": int(seguidores),
+            "crecimiento_7d": int(crecimiento),
+            "crecimiento_7d_pct": redondea(
+                crecimiento / (seguidores - crecimiento) * 100.0
+                if seguidores - crecimiento > 0 else 0.0
+            ),
+            "publicaciones_7d": int(publicaciones),
+            "interacciones_7d": int(interacciones),
+            "interacciones_por_publicacion": redondea(
+                interacciones / publicaciones if publicaciones else 0.0, 0
+            ),
+            "engagement_rate": calcula_engagement_rate(interacciones, seguidores),
+            "share_of_voice_pct": reparto.get(actor["nombre"], 0.0),
+            "menciones_30d": int(actor.get("menciones_30d", 0) or 0),
+            "gasto_ads_30d_mxn": redondea(gasto, 0),
+            "alcance_30d": int(alcance),
+            "cpm_mxn": costo_por_mil_alcanzados(gasto, alcance),
+            "nfs": redondea(actor.get("nfs", 0.0)),
+            "anuncios_activos": int(actor.get("anuncios_activos", 0) or 0),
+            "temas_pauta": list(actor.get("temas_pauta", [])),
+            "formatos": (actor.get("formatos")
+                         or analiza_formatos(actor.get("publicaciones", []))),
+        })
+
+    tabla.sort(key=lambda a: a["share_of_voice_pct"], reverse=True)
+    for posicion, fila in enumerate(tabla, start=1):
+        fila["posicion_sov"] = posicion
+        mejores = [f for f in fila["formatos"] if f.get("es_mejor")]
+        fila["mejor_formato"] = mejores[0]["formato"] if mejores else None
+    return tabla
+
+
+DIAS_SEMANA = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
+
+#: Franjas operativas de campana: la manana sirve para convocar, la tarde para
+#: dar seguimiento y la noche es donde se concentra el consumo de video.
+FRANJAS = (
+    ("Mañana", 6, 11),
+    ("Tarde", 12, 18),
+    ("Noche", 19, 23),
+)
+
+
+def resume_franjas(registros: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Agrega las publicaciones en las tres franjas operativas del dia."""
+    salida: List[Dict[str, Any]] = []
+    for nombre, desde, hasta in FRANJAS:
+        dentro = [r for r in registros
+                  if desde <= int(r.get("hora", 0)) <= hasta]
+        alcance = sum(float(r.get("alcance", 0) or 0) for r in dentro)
+        interacciones = sum(float(r.get("interacciones", 0) or 0) for r in dentro)
+        salida.append({
+            "franja": nombre,
+            "rango": f"{desde:02d}:00 a {hasta:02d}:59",
+            "publicaciones": len(dentro),
+            "alcance": int(alcance),
+            "interacciones": int(interacciones),
+            "tasa_respuesta": redondea(interacciones / alcance * 100.0 if alcance else 0.0),
+        })
+    mejor = max(salida, key=lambda f: f["tasa_respuesta"], default=None)
+    for franja in salida:
+        franja["es_mejor"] = bool(mejor and franja["franja"] == mejor["franja"]
+                                  and franja["tasa_respuesta"] > 0)
+    return salida
+
+
+def analiza_formatos(registros: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Rendimiento por formato de publicacion.
+
+    Compara Reel, Imagen, Carrusel y Video largo por tasa de respuesta sobre
+    alcance, no por interacciones absolutas: un Reel con mucho alcance puede
+    acumular mas likes y convertir peor que un carrusel bien armado.
+    """
+    agrupado: Dict[str, Dict[str, float]] = {}
+    for registro in registros:
+        formato = str(registro.get("formato") or "Sin clasificar")
+        celda = agrupado.setdefault(formato, {
+            "publicaciones": 0.0, "alcance": 0.0, "interacciones": 0.0
+        })
+        celda["publicaciones"] += 1
+        celda["alcance"] += float(registro.get("alcance", 0) or 0)
+        celda["interacciones"] += float(registro.get("interacciones", 0) or 0)
+
+    salida: List[Dict[str, Any]] = []
+    for formato, celda in agrupado.items():
+        alcance = celda["alcance"]
+        salida.append({
+            "formato": formato,
+            "publicaciones": int(celda["publicaciones"]),
+            "alcance_promedio": int(alcance / celda["publicaciones"]) if celda["publicaciones"] else 0,
+            "interacciones": int(celda["interacciones"]),
+            "interacciones_por_publicacion": redondea(
+                celda["interacciones"] / celda["publicaciones"]
+                if celda["publicaciones"] else 0.0, 0),
+            "tasa_respuesta": redondea(
+                celda["interacciones"] / alcance * 100.0 if alcance else 0.0),
+        })
+
+    salida.sort(key=lambda f: f["tasa_respuesta"], reverse=True)
+    for posicion, fila in enumerate(salida):
+        fila["es_mejor"] = posicion == 0
+    return salida
+
+
+def matriz_smart_timing(registros: Sequence[Dict[str, Any]],
+                        top: int = 6) -> Dict[str, Any]:
+    """Mapa de calor de respuesta organica por dia y hora.
+
+    registros: publicaciones con dia (0=lunes), hora (0-23), interacciones y
+    alcance. La celda guarda la tasa de respuesta = interacciones / alcance
+    x 100, que es comparable entre horas con distinto volumen de publicacion.
+    Devuelve la matriz 7x24, las mejores franjas y el maximo para escalar
+    el degradado en el frontend.
+    """
+    acumulado = [[{"interacciones": 0.0, "alcance": 0.0, "publicaciones": 0}
+                  for _ in range(24)] for _ in range(7)]
+
+    for registro in registros:
+        dia = int(registro.get("dia", 0)) % 7
+        hora = int(registro.get("hora", 0)) % 24
+        celda = acumulado[dia][hora]
+        celda["interacciones"] += float(registro.get("interacciones", 0) or 0)
+        celda["alcance"] += float(registro.get("alcance", 0) or 0)
+        celda["publicaciones"] += 1
+
+    matriz: List[List[float]] = []
+    planas: List[Dict[str, Any]] = []
+    for dia in range(7):
+        fila: List[float] = []
+        for hora in range(24):
+            celda = acumulado[dia][hora]
+            tasa = (celda["interacciones"] / celda["alcance"] * 100.0
+                    if celda["alcance"] else 0.0)
+            tasa = redondea(tasa)
+            fila.append(tasa)
+            if celda["publicaciones"]:
+                planas.append({
+                    "dia": dia,
+                    "dia_nombre": DIAS_SEMANA[dia],
+                    "hora": hora,
+                    "tasa_respuesta": tasa,
+                    "publicaciones": celda["publicaciones"],
+                    "interacciones": int(celda["interacciones"]),
+                })
+        matriz.append(fila)
+
+    planas.sort(key=lambda c: c["tasa_respuesta"], reverse=True)
+    maximo = max((c["tasa_respuesta"] for c in planas), default=0.0)
+
+    return {
+        "dias": list(DIAS_SEMANA),
+        "matriz": matriz,
+        "maximo": maximo,
+        "publicaciones_analizadas": len(registros),
+        "mejores_franjas": planas[:top],
+        "franjas": resume_franjas(registros),
+    }
+
+
+def detecta_anomalias(serie: Sequence[float], umbral_z: float = 2.8,
+                      minimo_absoluto: float = 25.0,
+                      salto_minimo: float = 2.0) -> List[Dict[str, Any]]:
+    """Picos atipicos en una serie diaria mediante puntuacion z.
+
+    Se usa sobre el volumen de comentarios negativos: un pico que se aparta
+    mas de `umbral_z` desviaciones de la media reciente no es conversacion
+    organica, es un evento. La media y la desviacion se calculan excluyendo
+    el punto evaluado para que un pico muy grande no oculte su propia anomalia.
+    """
+    valores = [float(v or 0) for v in serie]
+    if len(valores) < 5:
+        return []
+
+    picos: List[Dict[str, Any]] = []
+    for indice, valor in enumerate(valores):
+        resto = valores[:indice] + valores[indice + 1:]
+        media = statistics.fmean(resto)
+        desviacion = statistics.pstdev(resto)
+        if desviacion <= 0:
+            continue
+        z = (valor - media) / desviacion
+        if (z >= umbral_z and valor >= minimo_absoluto
+                and valor >= media * salto_minimo):
+            picos.append({
+                "indice": indice,
+                "valor": redondea(valor, 0),
+                "media_referencia": redondea(media, 0),
+                "z": redondea(z),
+            })
+    return picos
+
+
+def construye_alertas(
+    topicos: Sequence[Dict[str, Any]],
+    fechas: Sequence[str],
+    umbral_z: float = 2.8,
+    umbral_cuentas_nuevas_pct: float = 35.0,
+) -> List[Dict[str, Any]]:
+    """Alertas tempranas de crisis tematica y de ataque coordinado.
+
+    Cruza tres senales por topico:
+      - pico atipico de menciones negativas (puntuacion z);
+      - proporcion de cuentas recien creadas entre quienes comentan;
+      - favorabilidad neta del tema.
+    La severidad sube cuando coinciden el pico y las cuentas nuevas: ese
+    patron distingue una crisis real de una campana de descalificacion.
+    """
+    alertas: List[Dict[str, Any]] = []
+
+    for topico in topicos:
+        serie = topico.get("serie_negativas", [])
+        picos = detecta_anomalias(serie, umbral_z)
+        cuentas_nuevas = float(topico.get("cuentas_nuevas_pct", 0.0) or 0.0)
+        nfs = float(topico.get("nfs", 0.0) or 0.0)
+
+        if not picos and cuentas_nuevas < umbral_cuentas_nuevas_pct:
+            continue
+
+        pico = max(picos, key=lambda p: p["z"]) if picos else None
+        fecha = (fechas[pico["indice"]] if pico and pico["indice"] < len(fechas)
+                 else (fechas[-1] if fechas else None))
+
+        coordinado = bool(pico) and cuentas_nuevas >= umbral_cuentas_nuevas_pct
+        if coordinado:
+            tipo = "ataque_coordinado"
+            severidad = "alta"
+            titulo = "Posible ataque coordinado en " + topico["tema"]
+        elif pico:
+            tipo = "crisis_tematica"
+            severidad = "alta" if nfs <= -25 else "media"
+            titulo = "Pico de conversación negativa en " + topico["tema"]
+        else:
+            tipo = "anomalia_cuentas"
+            severidad = "media"
+            titulo = "Concentración de cuentas recién creadas en " + topico["tema"]
+
+        evidencia = []
+        if pico:
+            evidencia.append(
+                f"{int(pico['valor'])} menciones negativas contra una media de "
+                f"{int(pico['media_referencia'])} (z = {pico['z']})"
+            )
+        if cuentas_nuevas:
+            evidencia.append(
+                f"{redondea(cuentas_nuevas)}% de las cuentas que comentan se "
+                f"crearon en los últimos 30 días"
+            )
+        evidencia.append(f"Favorabilidad neta del tema: {redondea(nfs)}")
+
+        alertas.append({
+            "tipo": tipo,
+            "severidad": severidad,
+            "titulo": titulo,
+            "tema": topico["tema"],
+            "fecha": fecha,
+            "cuentas_nuevas_pct": redondea(cuentas_nuevas),
+            "z": pico["z"] if pico else None,
+            "evidencia": evidencia,
+        })
+
+    orden = {"alta": 0, "media": 1, "baja": 2}
+    alertas.sort(key=lambda a: (orden.get(a["severidad"], 3), -(a["z"] or 0)))
+    return alertas
+
+
+def construye_fiscalizacion(tope_mxn: float, devengado_sif_mxn: float,
+                            gasto_ads_mxn: float) -> Dict[str, Any]:
+    """Semaforo de fiscalizacion: gasto devengado reportado al SIF contra el
+    tope oficial de campana, con la pauta digital como componente auditable."""
+    tope = float(tope_mxn or 0)
+    devengado = float(devengado_sif_mxn or 0)
+    uso = (devengado / tope * 100.0) if tope else 0.0
+    if uso >= 90:
+        semaforo = "rojo"
+    elif uso >= 75:
+        semaforo = "ambar"
+    else:
+        semaforo = "verde"
+    return {
+        "tope_campana_mxn": redondea(tope, 0),
+        "devengado_sif_mxn": redondea(devengado, 0),
+        "disponible_mxn": redondea(max(tope - devengado, 0.0), 0),
+        "uso_tope_pct": redondea(uso),
+        "pauta_digital_mxn": redondea(gasto_ads_mxn, 0),
+        "pauta_sobre_devengado_pct": redondea(
+            gasto_ads_mxn / devengado * 100.0 if devengado else 0.0
+        ),
+        "semaforo": semaforo,
+    }
+
+
+# =====================================================================
 # 6. ENSAMBLADO DEL JSON MAESTRO
 # =====================================================================
 
@@ -751,6 +1098,12 @@ def construye_eleccion(
         kpis_redes.get("sentimiento_negativo_pct", 0.0),
     ))
 
+    fiscalizacion = identidad.get("fiscalizacion") or construye_fiscalizacion(
+        candidato.get("tope_gastos_campana_mxn", 0),
+        identidad.get("devengado_sif_mxn", 0),
+        kpis_redes.get("gasto_ads_acumulado_mxn", 0),
+    )
+
     return {
         "eleccion_id": identidad["eleccion_id"],
         "cargo": identidad["cargo"],
@@ -760,31 +1113,91 @@ def construye_eleccion(
         "candidato": candidato,
         "parametros": asdict(parametros),
         "indicadores": indicadores,
+        "fiscalizacion": fiscalizacion,
         "secciones": list(secciones),
         "redes": {
             "kpis": kpis_redes,
             "serie_tiempo": redes.get("serie_tiempo", []),
             "competidores": redes.get("competidores", []),
+            "benchmark": redes.get("benchmark", []),
+            "smart_timing": redes.get("smart_timing", {}),
+            "alertas": redes.get("alertas", []),
             "topicos": redes.get("topicos", []),
+            "origen_serie": redes.get("origen_serie"),
         },
     }
+
+
+#: Por encima de este tamano el JSON se escribe compacto: con 3 mil secciones
+#: la sangria agrega cerca de un tercio del peso sin aportar legibilidad real.
+UMBRAL_SANGRIA_BYTES = 1_200_000
+
+
+def _bloque_meta(fuente_primaria: str, elecciones: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "version_esquema": VERSION_ESQUEMA,
+        "generado_en": ahora_iso(),
+        "generador": "etl_electoral_sync.py",
+        "marca": "Consensus Estrategia",
+        "fuente_primaria": fuente_primaria,
+        "elecciones_incluidas": len(elecciones),
+        "secciones_incluidas": sum(len(e.get("secciones", [])) for e in elecciones),
+    }
+
+
+def _vuelca(paquete: Dict[str, Any], ruta: str) -> str:
+    compacto = json.dumps(paquete, ensure_ascii=False, separators=(",", ":"))
+    contenido = (json.dumps(paquete, ensure_ascii=False, indent=2)
+                 if len(compacto) < UMBRAL_SANGRIA_BYTES else compacto)
+    with open(ruta, "w", encoding="utf-8") as fh:
+        fh.write(contenido)
+    return ruta
 
 
 def escribe_json_maestro(elecciones: Sequence[Dict[str, Any]], ruta: str,
                          fuente_primaria: str = "INE / IEPC Jalisco") -> str:
-    paquete = {
-        "meta": {
-            "version_esquema": VERSION_ESQUEMA,
-            "generado_en": ahora_iso(),
-            "generador": "etl_electoral_sync.py",
-            "marca": "Consensus Estrategia",
-            "fuente_primaria": fuente_primaria,
-        },
+    return _vuelca({
+        "meta": _bloque_meta(fuente_primaria, elecciones),
         "elecciones": list(elecciones),
-    }
-    with open(ruta, "w", encoding="utf-8") as fh:
-        json.dump(paquete, fh, ensure_ascii=False, indent=2)
-    return ruta
+    }, ruta)
+
+
+def escribe_por_eleccion(elecciones: Sequence[Dict[str, Any]], carpeta: str,
+                         fuente_primaria: str = "INE / IEPC Jalisco") -> List[str]:
+    """Escribe un archivo por eleccion mas un indice ligero.
+
+    Es la ruta recomendada en produccion: el tablero carga el indice, que pesa
+    unos kilobytes, y baja el detalle seccional solo del territorio abierto.
+    """
+    os.makedirs(carpeta, exist_ok=True)
+    rutas: List[str] = []
+    indice: List[Dict[str, Any]] = []
+
+    for eleccion in elecciones:
+        nombre = eleccion["eleccion_id"] + ".json"
+        rutas.append(_vuelca({
+            "meta": _bloque_meta(fuente_primaria, [eleccion]),
+            "elecciones": [eleccion],
+        }, os.path.join(carpeta, nombre)))
+
+        indice.append({
+            "eleccion_id": eleccion["eleccion_id"],
+            "cargo": eleccion["cargo"],
+            "territorio": {
+                k: eleccion["territorio"].get(k)
+                for k in ("entidad", "municipio", "distrito", "lista_nominal",
+                          "secciones_totales")
+            },
+            "coalicion": (eleccion.get("candidato") or {}).get("coalicion"),
+            "indicadores": eleccion.get("indicadores", {}),
+            "archivo": nombre,
+        })
+
+    rutas.append(_vuelca({
+        "meta": _bloque_meta(fuente_primaria, elecciones),
+        "indice": indice,
+    }, os.path.join(carpeta, "indice.json")))
+    return rutas
 
 
 # =====================================================================
@@ -873,169 +1286,647 @@ def procesa_configuracion(ruta_config: str, con_red: bool = False) -> List[Dict[
             sum(p.get("gasto_ads_mxn", 0.0) for p in redes["serie_tiempo"]), 0
         ))
 
+        # --- Suite digital: misma maquinaria que usa el generador demo ------
+        publicaciones = conf_redes.get("publicaciones", [])
+        if publicaciones:
+            redes["smart_timing"] = matriz_smart_timing(publicaciones)
+
+        fechas_serie = [p.get("fecha") for p in redes["serie_tiempo"]]
+        if any(t.get("serie_negativas") for t in redes["topicos"]):
+            redes["alertas"] = construye_alertas(redes["topicos"], fechas_serie)
+
+        actores = conf_redes.get("actores")
+        if not actores and redes["competidores"]:
+            # Compatibilidad: si solo hay competidores en formato simple, se
+            # arma el benchmark con la candidatura propia al frente.
+            actores = [{
+                "nombre": (entrada.get("candidato") or {}).get("nombre", "Candidatura propia"),
+                "coalicion": (entrada.get("candidato") or {}).get("coalicion", ""),
+                "es_propio": True,
+                "seguidores": redes["kpis"].get("audiencia_total", 0),
+                "crecimiento_7d": sum(
+                    p.get("nuevos_seguidores", 0) for p in redes["serie_tiempo"][-7:]),
+                "publicaciones_7d": conf_redes.get("publicaciones_7d", len(publicaciones[-7:]) or 0),
+                # Si la configuracion no trae interacciones semanales, se
+                # derivan del engagement medio sobre la audiencia. La ventana
+                # es la misma que la de los rivales (siete dias), de modo que
+                # la tasa del benchmark queda comparable entre actores.
+                "interacciones_7d": conf_redes.get(
+                    "interacciones_7d",
+                    int(redes["kpis"].get("audiencia_total", 0)
+                        * redes["kpis"].get("engagement_promedio", 0.0) / 100.0)
+                ),
+                "menciones_30d": sum(t.get("menciones", 0) for t in redes["topicos"]),
+                "gasto_ads_30d_mxn": redes["kpis"].get("gasto_ads_acumulado_mxn", 0),
+                "alcance_30d": sum(p.get("alcance", 0) for p in redes["serie_tiempo"]),
+                "nfs": redes["kpis"].get("nfs", 0.0),
+                "anuncios_activos": redes["kpis"].get("anuncios_activos", 0),
+                "temas_pauta": conf_redes.get("temas_pauta", []),
+                "publicaciones": publicaciones,
+            }] + [{
+                "nombre": c.get("nombre"),
+                "coalicion": c.get("coalicion", ""),
+                "es_propio": False,
+                "seguidores": c.get("audiencia", 0),
+                "crecimiento_7d": c.get("crecimiento_7d", 0),
+                "publicaciones_7d": c.get("publicaciones_7d", 0),
+                "interacciones_7d": c.get("interacciones_7d", 0),
+                "menciones_30d": c.get("menciones_30d", 0),
+                "gasto_ads_30d_mxn": c.get("gasto_ads_mxn", 0),
+                "alcance_30d": c.get("alcance_30d", 0),
+                "nfs": c.get("nfs", 0.0),
+                "anuncios_activos": c.get("anuncios_activos", 0),
+                "temas_pauta": c.get("temas_pauta", []),
+                "publicaciones": c.get("publicaciones", []),
+            } for c in redes["competidores"]]
+
+        if actores:
+            redes["benchmark"] = construye_benchmark(actores)
+            propio = next((b for b in redes["benchmark"] if b["es_propio"]), None)
+            if propio:
+                redes["kpis"].setdefault("share_of_voice_pct", propio["share_of_voice_pct"])
+                redes["kpis"].setdefault("cpm_mxn", propio["cpm_mxn"])
+
+
         resultado.append(construye_eleccion(entrada, secciones, redes, parametros))
 
     return resultado
 
 
 # =====================================================================
-# 8. GENERADOR DE DEMOSTRACION
+# 8. CATALOGO TERRITORIAL Y GENERADOR DE DEMOSTRACION
 # =====================================================================
 
-def genera_demo(semilla: int = 20270606) -> List[Dict[str, Any]]:
-    """Construye dos elecciones sinteticas (una alcaldia y un distrito local)
-    con la misma estructura que produce el pipeline real. Sirve para levantar
-    el dashboard sin credenciales ni archivos de computos."""
-    rng = random.Random(semilla)
+#: Proxy para estimar el tope de gastos de campana mientras no se carga el
+#: acuerdo vigente del IEPC. NO es el dato oficial: el tope real se fija por
+#: acuerdo del Consejo General y debe sustituirse en la configuracion del
+#: cliente (`candidato.tope_gastos_campana_mxn`).
+FACTOR_TOPE_PROXY_MXN_POR_ELECTOR = 8.50
 
-    plantillas = [
-        {
-            "eleccion_id": "JAL-MUN-TONALA-2027",
-            "cargo": "Presidencia Municipal",
-            "fecha_jornada": "2027-06-06",
-            "territorio": {"entidad": "Jalisco", "municipio": "Tonala", "distrito": None},
-            "candidato": {
-                "nombre": "Candidatura en precampana",
-                "coalicion": "Coalicion municipal",
-                "partidos": ["PAN", "PRI", "PRD"],
-                "tope_gastos_campana_mxn": 3_150_000,
-            },
-            "n_secciones": 210,
-            "lista_por_seccion": (1200, 2600),
-            "audiencia_inicial": 78000,
-        },
-        {
-            "eleccion_id": "JAL-DL-08-2027",
-            "cargo": "Diputacion Local",
-            "fecha_jornada": "2027-06-06",
-            "territorio": {"entidad": "Jalisco", "municipio": None, "distrito": "Distrito local 8"},
-            "candidato": {
-                "nombre": "Candidatura distrital",
-                "coalicion": "Coalicion estatal",
-                "partidos": ["MC"],
-                "tope_gastos_campana_mxn": 1_480_000,
-            },
-            "n_secciones": 128,
-            "lista_por_seccion": (900, 2100),
-            "audiencia_inicial": 41000,
-        },
-    ]
 
+@dataclass
+class PerfilMunicipal:
+    """Parametros de calibracion de un municipio para el paquete de demostracion.
+
+    `lista_nominal` y `secciones` son ordenes de magnitud declarados para
+    dimensionar el tablero; el corte oficial se toma del padron del INE y de
+    los computos del IEPC al correr el pipeline con `--config`.
+    """
+    clave: str
+    municipio: str
+    lista_nominal: int
+    secciones: int
+    fuerza_propia_pct: float
+    competitividad: float          # dispersion del margen: a mayor valor, mas swing
+    participacion_media_pct: float
+    audiencia_inicial: int
+    coalicion: str
+    partidos: Tuple[str, ...]
+    rivales: Tuple[Tuple[str, str], ...]
+    temas: Tuple[str, ...]
+    nota: str
+
+
+CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
+    PerfilMunicipal(
+        clave="GDL", municipio="Guadalajara", lista_nominal=1_080_000, secciones=920,
+        fuerza_propia_pct=34.5, competitividad=9.5, participacion_media_pct=52.0,
+        audiencia_inicial=146_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Morena Guadalajara", "Morena-PT-PVEM"), ("Movimiento Ciudadano GDL", "MC")),
+        temas=("Inseguridad", "Agua y drenaje", "Baches y pavimento",
+               "Movilidad y transporte", "Imagen pública", "Acusaciones personales"),
+        nota="Capital estatal, competencia cerrada entre Morena y MC",
+    ),
+    PerfilMunicipal(
+        clave="ZAP", municipio="Zapopan", lista_nominal=1_150_000, secciones=890,
+        fuerza_propia_pct=38.0, competitividad=7.5, participacion_media_pct=53.5,
+        audiencia_inicial=132_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Movimiento Ciudadano Zapopan", "MC"), ("Morena Zapopan", "Morena-PT-PVEM")),
+        temas=("Inseguridad", "Agua y drenaje", "Desarrollo urbano",
+               "Movilidad y transporte", "Imagen pública", "Acusaciones personales"),
+        nota="Bastión metropolitano con mayor lista nominal del estado",
+    ),
+    PerfilMunicipal(
+        clave="TLQ", municipio="San Pedro Tlaquepaque", lista_nominal=510_000, secciones=410,
+        fuerza_propia_pct=33.0, competitividad=10.5, participacion_media_pct=48.5,
+        audiencia_inicial=61_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Morena Tlaquepaque", "Morena-PT-PVEM"), ("Movimiento Ciudadano TLQ", "MC")),
+        temas=("Inseguridad", "Agua y drenaje", "Servicios públicos",
+               "Baches y pavimento", "Imagen pública", "Acusaciones personales"),
+        nota="Zona altamente disputada en el corredor sur del AMG",
+    ),
+    PerfilMunicipal(
+        clave="TLJ", municipio="Tlajomulco de Zúñiga", lista_nominal=490_000, secciones=360,
+        fuerza_propia_pct=31.5, competitividad=8.5, participacion_media_pct=47.0,
+        audiencia_inicial=54_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Movimiento Ciudadano Tlajomulco", "MC"), ("Morena Tlajomulco", "Morena-PT-PVEM")),
+        temas=("Agua y drenaje", "Inseguridad", "Movilidad y transporte",
+               "Servicios públicos", "Imagen pública", "Acusaciones personales"),
+        nota="Crecimiento habitacional acelerado y presión por servicios",
+    ),
+    PerfilMunicipal(
+        clave="TON", municipio="Tonalá", lista_nominal=395_000, secciones=290,
+        fuerza_propia_pct=32.0, competitividad=9.0, participacion_media_pct=46.5,
+        audiencia_inicial=48_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Morena Tonalá", "Morena-PT-PVEM"), ("Movimiento Ciudadano Tonalá", "MC")),
+        temas=("Inseguridad", "Agua y drenaje", "Recolección de basura",
+               "Baches y pavimento", "Imagen pública", "Acusaciones personales"),
+        nota="Plaza con alta volatilidad seccional",
+    ),
+    PerfilMunicipal(
+        clave="SAL", municipio="El Salto", lista_nominal=160_000, secciones=115,
+        fuerza_propia_pct=30.0, competitividad=11.0, participacion_media_pct=45.0,
+        audiencia_inicial=21_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Morena El Salto", "Morena-PT-PVEM"), ("Movimiento Ciudadano El Salto", "MC")),
+        temas=("Contaminacion del rio", "Inseguridad", "Agua y drenaje",
+               "Servicios públicos", "Imagen pública", "Acusaciones personales"),
+        nota="Corredor industrial con agenda ambiental dominante",
+    ),
+    PerfilMunicipal(
+        clave="PVR", municipio="Puerto Vallarta", lista_nominal=240_000, secciones=180,
+        fuerza_propia_pct=35.5, competitividad=8.0, participacion_media_pct=49.0,
+        audiencia_inicial=39_000, coalicion="Coalición opositora",
+        partidos=("PAN", "PRI", "PRD"),
+        rivales=(("Morena Puerto Vallarta", "Morena-PT-PVEM"), ("Movimiento Ciudadano PV", "MC")),
+        temas=("Agua y drenaje", "Inseguridad", "Turismo y empleo",
+               "Servicios públicos", "Imagen pública", "Acusaciones personales"),
+        nota="Plaza turística con electorado flotante",
+    ),
+)
+
+
+def _genera_secciones_sinteticas(perfil: PerfilMunicipal,
+                                 parametros: ParametrosCalculo,
+                                 rng: random.Random) -> List[Dict[str, Any]]:
+    """Reparte la lista nominal del municipio entre sus secciones y calcula
+    los mismos indicadores que produce la ruta real del pipeline."""
+    promedio = perfil.lista_nominal / max(perfil.secciones, 1)
+    secciones: List[Dict[str, Any]] = []
+
+    for i in range(1, perfil.secciones + 1):
+        lista_nominal = max(300, int(rng.gauss(promedio, promedio * 0.28)))
+        base = rng.gauss(perfil.fuerza_propia_pct, perfil.competitividad * 0.75)
+
+        resultados: Dict[str, Dict[str, float]] = {}
+        hist_tuplas: List[Tuple[int, float, float]] = []
+        margenes: List[float] = []
+
+        for idx, anio in enumerate((2018, 2021, 2024)):
+            participacion = limita_rango(
+                rng.gauss(perfil.participacion_media_pct, 6.5), 26.0, 79.0)
+            share_propio = limita_rango(
+                base + rng.gauss(idx * 0.9, perfil.competitividad * 0.55), 5.0, 74.0)
+            share_rival = limita_rango(
+                rng.gauss(100.0 - base - 28.0, perfil.competitividad * 0.6), 5.0, 74.0)
+            margen = share_propio - share_rival
+            emitidos = int(lista_nominal * participacion / 100.0)
+
+            resultados[str(anio)] = {
+                "participacion_pct": redondea(participacion),
+                "share_propio_pct": redondea(share_propio),
+                "share_primer_lugar_pct": redondea(max(share_propio, share_rival)),
+                "margen_pct": redondea(margen),
+                "votos_propios": int(emitidos * share_propio / 100.0),
+                "votos_emitidos": emitidos,
+            }
+            hist_tuplas.append((anio, share_propio, participacion))
+            margenes.append(margen)
+
+        swing = calcula_swing_index(margenes)
+        share_objetivo = min(
+            max(r["share_primer_lugar_pct"] for r in resultados.values())
+            + parametros.margen_seguridad_pct, 85.0)
+
+        secciones.append({
+            "seccion": f"{i:04d}",
+            "municipio": perfil.municipio,
+            "distrito_local": 1 + (i % 9),
+            "distrito_federal": 1 + (i % 6),
+            "casillas": max(1, lista_nominal // 750),
+            "lista_nominal": lista_nominal,
+            "participacion_media_pct": redondea(
+                statistics.fmean([h[2] for h in hist_tuplas])),
+            "ftn": calcula_ftn(hist_tuplas, parametros.factor_recencia),
+            "swing_index": swing,
+            "margen_ultima_pct": redondea(margenes[-1]),
+            "target_movilizacion": calcula_target_movilizacion(
+                lista_nominal, share_objetivo, parametros.abstencion_estimada_pct),
+            "clasificacion": clasifica_seccion(margenes[-1], swing, parametros),
+            "historico": resultados,
+        })
+
+    return secciones
+
+
+def limita_rango(valor: float, minimo: float, maximo: float) -> float:
+    return max(minimo, min(maximo, valor))
+
+
+def _genera_publicaciones(rng: random.Random, cantidad: int,
+                          audiencia: int) -> List[Dict[str, Any]]:
+    """Publicaciones sinteticas con hora, alcance e interacciones.
+
+    La estructura horaria reproduce el comportamiento observable en cuentas
+    politicas del AMG: repunte matutino al salir al trabajo, meseta de
+    sobremesa y pico nocturno; el fin de semana se recorre y se aplana.
+    """
+    curva_habil = {6: 0.55, 7: 0.85, 8: 1.15, 9: 1.05, 10: 0.85, 11: 0.75,
+                   12: 0.8, 13: 0.95, 14: 1.0, 15: 0.85, 16: 0.7, 17: 0.75,
+                   18: 0.9, 19: 1.1, 20: 1.3, 21: 1.35, 22: 1.05, 23: 0.7}
+    curva_finde = {8: 0.6, 9: 0.8, 10: 1.0, 11: 1.15, 12: 1.2, 13: 1.05,
+                   14: 0.9, 15: 0.85, 16: 0.9, 17: 1.0, 18: 1.1, 19: 1.15,
+                   20: 1.2, 21: 1.0, 22: 0.75}
+
+    # Cada formato tiene su propio perfil: el Reel compra alcance barato pero
+    # convierte menos; el carrusel alcanza a menos gente y responde mejor.
+    perfiles_formato = {
+        "Reel": {"peso": 0.42, "alcance": 1.55, "tasa": 1.00},
+        "Imagen": {"peso": 0.24, "alcance": 0.75, "tasa": 1.05},
+        "Carrusel": {"peso": 0.20, "alcance": 0.80, "tasa": 1.15},
+        "Video largo": {"peso": 0.14, "alcance": 0.95, "tasa": 0.88},
+    }
+    nombres = list(perfiles_formato.keys())
+    pesos = [perfiles_formato[n]["peso"] for n in nombres]
+
+    # Cada cuenta tiene su propia mano: una rinde con video, otra con
+    # carrusel. El sesgo se sortea una vez por cuenta, no por publicacion,
+    # para que el analisis de formatos encuentre un patron y no ruido.
+    sesgo_tasa = {n: rng.uniform(0.55, 1.62) for n in nombres}
+    sesgo_mezcla = [p * rng.uniform(0.6, 1.5) for p in pesos]
+
+    # Cada plaza tiene su propio reloj: en unas la conversacion despierta
+    # temprano y en otras se concentra de noche.
+    sesgo_franja = {"manana": rng.uniform(0.82, 1.28),
+                    "tarde": rng.uniform(0.82, 1.22),
+                    "noche": rng.uniform(0.82, 1.28)}
+
+    def factor_franja(hora: int) -> float:
+        if hora <= 11:
+            return sesgo_franja["manana"]
+        if hora <= 18:
+            return sesgo_franja["tarde"]
+        return sesgo_franja["noche"]
+
+    publicaciones: List[Dict[str, Any]] = []
+    for _ in range(cantidad):
+        dia = rng.randrange(7)
+        curva = curva_finde if dia >= 5 else curva_habil
+        hora = rng.choice(list(curva.keys()))
+        factor = curva[hora] * (0.88 if dia >= 5 else 1.0) * factor_franja(hora)
+        formato = rng.choices(nombres, weights=sesgo_mezcla, k=1)[0]
+        perfil = perfiles_formato[formato]
+
+        alcance = max(500, int(audiencia * rng.uniform(0.18, 0.62) * perfil["alcance"]))
+        tasa = limita_rango(
+            rng.gauss(2.6 * factor * perfil["tasa"] * sesgo_tasa[formato], 0.55), 0.3, 9.0)
+        publicaciones.append({
+            "dia": dia,
+            "hora": hora,
+            "formato": formato,
+            "alcance": alcance,
+            "interacciones": int(alcance * tasa / 100.0),
+        })
+    return publicaciones
+
+
+def _genera_topicos(perfil: PerfilMunicipal, fechas: Sequence[str],
+                    rng: random.Random) -> List[Dict[str, Any]]:
+    """Topicos de conversacion con su serie diaria de menciones negativas.
+
+    A un tema de cada municipio se le inyecta un evento: un pico de negativos
+    sostenido dos dias con una proporcion alta de cuentas recien creadas. Es
+    la firma que el detector de anomalias debe encontrar por su cuenta.
+    """
+    tema_atacado = rng.choice(perfil.temas[-2:])
+    topicos: List[Dict[str, Any]] = []
+
+    for tema in perfil.temas:
+        es_critico = tema not in ("Imagen pública", "Turismo y empleo")
+        nfs_base = rng.uniform(-42.0, -8.0) if es_critico else rng.uniform(2.0, 38.0)
+        volumen = rng.randint(220, 1600) * (1 + perfil.lista_nominal // 600_000)
+
+        media_negativa = volumen / len(fechas) * (0.62 if es_critico else 0.3)
+        serie = [max(0, int(rng.gauss(media_negativa, media_negativa * 0.15)))
+                 for _ in fechas]
+
+        cuentas_nuevas = rng.uniform(6.0, 22.0)
+        if tema == tema_atacado:
+            golpe = rng.randrange(len(fechas) - 4, len(fechas) - 1)
+            serie[golpe] = int(media_negativa * rng.uniform(4.2, 6.5))
+            serie[golpe + 1] = int(media_negativa * rng.uniform(2.8, 4.0))
+            cuentas_nuevas = rng.uniform(38.0, 64.0)
+            nfs_base = min(nfs_base, -28.0)
+
+        total_negativas = sum(serie)
+        positivas = max(0, int(volumen - total_negativas))
+        tendencia = ("al alza" if serie[-1] > statistics.fmean(serie[:-1])
+                     else "a la baja" if serie[-1] < statistics.fmean(serie[:-1]) * 0.85
+                     else "estable")
+
+        topicos.append({
+            "tema": tema,
+            "menciones": int(volumen),
+            "menciones_negativas": total_negativas,
+            "menciones_positivas": positivas,
+            "nfs": redondea(nfs_base),
+            "cuentas_nuevas_pct": redondea(cuentas_nuevas),
+            "es_critico": es_critico,
+            "tendencia": tendencia,
+            "serie_negativas": serie,
+        })
+
+    return topicos
+
+
+def genera_demo(semilla: int = 20270606,
+                catalogo: Sequence[PerfilMunicipal] = CATALOGO_JALISCO,
+                incluir_distrito: bool = True) -> List[Dict[str, Any]]:
+    """Paquete de demostracion con los siete municipios clave de Jalisco.
+
+    Cada municipio se construye con la misma maquinaria que usa la ruta real:
+    se generan las secciones, se calculan FTN, volatilidad y target, se arma
+    el benchmark competitivo, se procesan las publicaciones para el mapa de
+    mejores horas y se corre el detector de anomalias sobre la conversacion.
+    Los insumos son sinteticos; los calculos no.
+    """
     elecciones: List[Dict[str, Any]] = []
-    for plantilla in plantillas:
-        parametros = ParametrosCalculo()
-        secciones: List[Dict[str, Any]] = []
 
-        for i in range(1, plantilla["n_secciones"] + 1):
-            lista_nominal = rng.randint(*plantilla["lista_por_seccion"])
-            base = rng.gauss(36.0, 9.0)
-            historico_anios = [2018, 2021, 2024]
-            resultados: Dict[str, Dict[str, float]] = {}
-            hist_tuplas: List[Tuple[int, float, float]] = []
-            margenes: List[float] = []
+    for indice, perfil in enumerate(catalogo):
+        rng = random.Random(semilla + indice * 977)
+        parametros = ParametrosCalculo(
+            abstencion_estimada_pct=redondea(100.0 - perfil.participacion_media_pct)
+        )
 
-            for idx, anio in enumerate(historico_anios):
-                participacion = max(28.0, min(78.0, rng.gauss(48.0, 7.5)))
-                share_propio = max(6.0, min(72.0, base + rng.gauss(idx * 1.5, 5.5)))
-                share_rival = max(6.0, min(72.0, rng.gauss(34.0, 8.0)))
-                margen = share_propio - share_rival
-                emitidos = int(lista_nominal * participacion / 100.0)
-                resultados[str(anio)] = {
-                    "participacion_pct": redondea(participacion),
-                    "share_propio_pct": redondea(share_propio),
-                    "share_primer_lugar_pct": redondea(max(share_propio, share_rival)),
-                    "margen_pct": redondea(margen),
-                    "votos_propios": int(emitidos * share_propio / 100.0),
-                    "votos_emitidos": emitidos,
-                }
-                hist_tuplas.append((anio, share_propio, participacion))
-                margenes.append(margen)
+        secciones = _genera_secciones_sinteticas(perfil, parametros, rng)
 
-            ftn = calcula_ftn(hist_tuplas, parametros.factor_recencia)
-            swing = calcula_swing_index(margenes)
-            share_objetivo = min(
-                max(r["share_primer_lugar_pct"] for r in resultados.values())
-                + parametros.margen_seguridad_pct, 85.0
-            )
-            secciones.append({
-                "seccion": f"{i:04d}",
-                "municipio": plantilla["territorio"].get("municipio"),
-                "distrito_local": 8 if plantilla["cargo"] == "Diputacion Local" else rng.randint(5, 12),
-                "distrito_federal": rng.randint(7, 11),
-                "casillas": max(1, lista_nominal // 750),
-                "lista_nominal": lista_nominal,
-                "participacion_media_pct": redondea(
-                    statistics.fmean([h[2] for h in hist_tuplas])
-                ),
-                "ftn": ftn,
-                "swing_index": swing,
-                "margen_ultima_pct": redondea(margenes[-1]),
-                "target_movilizacion": calcula_target_movilizacion(
-                    lista_nominal, share_objetivo, parametros.abstencion_estimada_pct
-                ),
-                "clasificacion": clasifica_seccion(margenes[-1], swing, parametros),
-                "historico": resultados,
+        # --- Serie diaria de audiencia y pauta -----------------------------
+        serie = MetaGraphInsightsClient.genera_mock(
+            dias=30, audiencia_inicial=perfil.audiencia_inicial,
+            semilla=semilla + indice * 31,
+        )
+        fechas = [p["fecha"] for p in serie]
+        audiencia_final = serie[-1]["audiencia"]
+        gasto_30d = sum(p["gasto_ads_mxn"] for p in serie)
+        alcance_30d = sum(p["alcance"] for p in serie)
+
+        # --- Escucha: topicos, alertas y sentimiento -----------------------
+        topicos = _genera_topicos(perfil, fechas, rng)
+        alertas = construye_alertas(topicos, fechas)
+
+        negativas = sum(t["menciones_negativas"] for t in topicos)
+        positivas = sum(t["menciones_positivas"] for t in topicos)
+        universo = max(negativas + positivas, 1)
+        positivo_pct = redondea(positivas / universo * 100.0)
+        negativo_pct = redondea(negativas / universo * 100.0)
+        menciones_propias = universo
+
+        # --- Publicaciones propias: alimentan formatos y mejores horas -----
+        publicaciones = _genera_publicaciones(rng, 260, perfil.audiencia_inicial)
+        smart_timing = matriz_smart_timing(publicaciones)
+
+        # --- Benchmark competitivo ----------------------------------------
+        actores = [{
+            "nombre": "Candidatura Consensus",
+            "coalicion": perfil.coalicion,
+            "es_propio": True,
+            "seguidores": audiencia_final,
+            "crecimiento_7d": sum(p["nuevos_seguidores"] for p in serie[-7:]),
+            "publicaciones_7d": rng.randint(18, 34),
+            "interacciones_7d": int(audiencia_final * rng.uniform(0.022, 0.075)),
+            "menciones_30d": menciones_propias,
+            "gasto_ads_30d_mxn": gasto_30d,
+            "alcance_30d": alcance_30d,
+            "nfs": calcula_nfs(positivo_pct, negativo_pct),
+            "anuncios_activos": rng.randint(9, 34),
+            "temas_pauta": list(rng.sample(list(perfil.temas), 3)),
+            "publicaciones": publicaciones,
+        }]
+
+        for nombre, coalicion in perfil.rivales:
+            seguidores = int(audiencia_final * rng.uniform(0.55, 1.65))
+            actores.append({
+                "nombre": nombre,
+                "coalicion": coalicion,
+                "es_propio": False,
+                "seguidores": seguidores,
+                "crecimiento_7d": int(seguidores * rng.uniform(0.004, 0.028)),
+                "publicaciones_7d": rng.randint(12, 42),
+                "interacciones_7d": int(seguidores * rng.uniform(0.014, 0.068)),
+                "menciones_30d": int(menciones_propias * rng.uniform(0.45, 1.5)),
+                "gasto_ads_30d_mxn": redondea(gasto_30d * rng.uniform(0.6, 2.1), 0),
+                "alcance_30d": int(alcance_30d * rng.uniform(0.5, 1.8)),
+                "nfs": redondea(rng.uniform(-24.0, 30.0)),
+                "anuncios_activos": rng.randint(5, 48),
+                "temas_pauta": list(rng.sample(list(perfil.temas), 3)),
+                "publicaciones": _genera_publicaciones(rng, 140, seguidores),
             })
 
-        serie = MetaGraphInsightsClient.genera_mock(
-            dias=30,
-            audiencia_inicial=plantilla["audiencia_inicial"],
-            semilla=semilla + len(plantilla["eleccion_id"]),
-        )
-        positivos = redondea(rng.uniform(52.0, 68.0))
-        negativos = redondea(rng.uniform(16.0, 28.0))
+        benchmark = construye_benchmark(actores)
 
         redes = {
             "kpis": {
-                "audiencia_total": serie[-1]["audiencia"],
+                "audiencia_total": audiencia_final,
                 "engagement_promedio": redondea(
-                    statistics.fmean([p["engagement_rate"] for p in serie])
-                ),
-                "sentimiento_positivo_pct": positivos,
-                "sentimiento_negativo_pct": negativos,
-                "nfs": calcula_nfs(positivos, negativos),
-                "gasto_ads_acumulado_mxn": redondea(
-                    sum(p["gasto_ads_mxn"] for p in serie), 0
-                ),
-                "anuncios_activos": rng.randint(8, 26),
+                    statistics.fmean([p["engagement_rate"] for p in serie])),
+                "sentimiento_positivo_pct": positivo_pct,
+                "sentimiento_negativo_pct": negativo_pct,
+                "nfs": calcula_nfs(positivo_pct, negativo_pct),
+                "gasto_ads_acumulado_mxn": redondea(gasto_30d, 0),
+                "anuncios_activos": rng.randint(9, 34),
+                "alcance_30d": alcance_30d,
+                "cpm_mxn": costo_por_mil_alcanzados(gasto_30d, alcance_30d),
+                "share_of_voice_pct": next(
+                    (b["share_of_voice_pct"] for b in benchmark if b["es_propio"]), 0.0),
             },
             "serie_tiempo": serie,
-            "origen_serie": "mock",
+            "benchmark": benchmark,
             "competidores": [
                 {
-                    "nombre": nombre,
-                    "coalicion": coalicion,
-                    "audiencia": rng.randint(28000, 96000),
-                    "engagement_rate": redondea(rng.uniform(2.1, 6.4)),
-                    "gasto_ads_mxn": redondea(rng.uniform(120000, 480000), 0),
-                    "nfs": redondea(rng.uniform(-18.0, 34.0)),
+                    "nombre": b["nombre"],
+                    "coalicion": b["coalicion"],
+                    "audiencia": b["seguidores"],
+                    "engagement_rate": b["engagement_rate"],
+                    "gasto_ads_mxn": b["gasto_ads_30d_mxn"],
+                    "nfs": b["nfs"],
                 }
-                for nombre, coalicion in [
-                    ("Contendiente A", "Partido en el gobierno"),
-                    ("Contendiente B", "Coalicion opositora"),
-                    ("Contendiente C", "Partido emergente"),
-                ]
+                for b in benchmark if not b["es_propio"]
             ],
-            "topicos": [
-                {"tema": "Inseguridad", "menciones": rng.randint(900, 2400),
-                 "nfs": redondea(rng.uniform(-45.0, -12.0)), "tendencia": "al alza"},
-                {"tema": "Agua y drenaje", "menciones": rng.randint(600, 1800),
-                 "nfs": redondea(rng.uniform(-38.0, -5.0)), "tendencia": "estable"},
-                {"tema": "Servicios publicos", "menciones": rng.randint(400, 1500),
-                 "nfs": redondea(rng.uniform(-20.0, 15.0)), "tendencia": "a la baja"},
-                {"tema": "Imagen publica", "menciones": rng.randint(500, 2000),
-                 "nfs": redondea(rng.uniform(5.0, 42.0)), "tendencia": "al alza"},
-                {"tema": "Movilidad y transporte", "menciones": rng.randint(300, 1100),
-                 "nfs": redondea(rng.uniform(-25.0, 8.0)), "tendencia": "estable"},
-            ],
+            "smart_timing": smart_timing,
+            "alertas": alertas,
+            "topicos": topicos,
+            "origen_serie": "mock",
         }
 
-        identidad = {k: plantilla[k] for k in
-                     ("eleccion_id", "cargo", "fecha_jornada", "territorio", "candidato")}
-        identidad["fecha_corte"] = hoy_iso()
+        # --- Fiscalizacion --------------------------------------------------
+        tope = int(perfil.lista_nominal * FACTOR_TOPE_PROXY_MXN_POR_ELECTOR)
+        devengado = redondea(tope * rng.uniform(0.46, 0.93), 0)
+
+        identidad = {
+            "eleccion_id": f"JAL-MUN-{perfil.clave}-2027",
+            "cargo": "Presidencia Municipal",
+            "fecha_jornada": "2027-06-06",
+            "fecha_corte": hoy_iso(),
+            "territorio": {
+                "entidad": "Jalisco",
+                "municipio": perfil.municipio,
+                "distrito": None,
+                "lista_nominal": perfil.lista_nominal,
+                "participacion_historica_pct": perfil.participacion_media_pct,
+                "nota": perfil.nota,
+            },
+            "candidato": {
+                "nombre": "Candidatura Consensus",
+                "coalicion": perfil.coalicion,
+                "partidos": list(perfil.partidos),
+                "tope_gastos_campana_mxn": tope,
+            },
+            "calibracion": {
+                "origen": "estimacion",
+                "advertencia": (
+                    "Lista nominal, número de secciones y tope de gastos son "
+                    "valores de calibración para demostración. Sustituir por el "
+                    "corte oficial del padrón del INE, la seccionalización "
+                    "vigente y el acuerdo de topes del IEPC Jalisco."
+                ),
+                "factor_tope_proxy": FACTOR_TOPE_PROXY_MXN_POR_ELECTOR,
+            },
+            "fiscalizacion": construye_fiscalizacion(tope, devengado, gasto_30d),
+        }
+
         elecciones.append(construye_eleccion(identidad, secciones, redes, parametros))
 
+    if incluir_distrito:
+        elecciones.append(_genera_distrito_demo(semilla))
+
     return elecciones
+
+
+def _genera_distrito_demo(semilla: int) -> Dict[str, Any]:
+    """Una diputacion local, para verificar que el selector de cargo cambia el
+    universo territorial sin tocar la vista."""
+    perfil = PerfilMunicipal(
+        clave="DL08", municipio="Distrito local 8", lista_nominal=185_000, secciones=128,
+        fuerza_propia_pct=36.5, competitividad=8.0, participacion_media_pct=48.0,
+        audiencia_inicial=41_000, coalicion="Coalición estatal", partidos=("MC",),
+        rivales=(("Morena Distrito 8", "Morena-PT-PVEM"), ("PAN Distrito 8", "PAN-PRI-PRD")),
+        temas=("Inseguridad", "Agua y drenaje", "Servicios públicos",
+               "Imagen pública", "Acusaciones personales"),
+        nota="Distrito local de prueba para cargo legislativo",
+    )
+    rng = random.Random(semilla + 7717)
+    parametros = ParametrosCalculo(
+        abstencion_estimada_pct=redondea(100.0 - perfil.participacion_media_pct))
+
+    secciones = _genera_secciones_sinteticas(perfil, parametros, rng)
+    serie = MetaGraphInsightsClient.genera_mock(
+        dias=30, audiencia_inicial=perfil.audiencia_inicial, semilla=semilla + 99)
+    fechas = [p["fecha"] for p in serie]
+    topicos = _genera_topicos(perfil, fechas, rng)
+    alertas = construye_alertas(topicos, fechas)
+
+    negativas = sum(t["menciones_negativas"] for t in topicos)
+    positivas = sum(t["menciones_positivas"] for t in topicos)
+    universo = max(negativas + positivas, 1)
+    positivo_pct = redondea(positivas / universo * 100.0)
+    negativo_pct = redondea(negativas / universo * 100.0)
+
+    gasto_30d = sum(p["gasto_ads_mxn"] for p in serie)
+    alcance_30d = sum(p["alcance"] for p in serie)
+    audiencia_final = serie[-1]["audiencia"]
+
+    publicaciones_propias = _genera_publicaciones(rng, 210, perfil.audiencia_inicial)
+    actores = [{
+        "nombre": "Candidatura Consensus", "coalicion": perfil.coalicion, "es_propio": True,
+        "seguidores": audiencia_final,
+        "crecimiento_7d": sum(p["nuevos_seguidores"] for p in serie[-7:]),
+        "publicaciones_7d": rng.randint(14, 28),
+        "interacciones_7d": int(audiencia_final * rng.uniform(0.020, 0.070)),
+        "menciones_30d": universo, "gasto_ads_30d_mxn": gasto_30d,
+        "alcance_30d": alcance_30d, "nfs": calcula_nfs(positivo_pct, negativo_pct),
+        "anuncios_activos": rng.randint(6, 20),
+        "temas_pauta": list(rng.sample(list(perfil.temas), 3)),
+        "publicaciones": publicaciones_propias,
+    }]
+    for nombre, coalicion in perfil.rivales:
+        seguidores = int(audiencia_final * rng.uniform(0.6, 1.5))
+        actores.append({
+            "nombre": nombre, "coalicion": coalicion, "es_propio": False,
+            "seguidores": seguidores,
+            "crecimiento_7d": int(seguidores * rng.uniform(0.005, 0.025)),
+            "publicaciones_7d": rng.randint(10, 32),
+            "interacciones_7d": int(seguidores * rng.uniform(0.013, 0.062)),
+            "menciones_30d": int(universo * rng.uniform(0.5, 1.4)),
+            "gasto_ads_30d_mxn": redondea(gasto_30d * rng.uniform(0.6, 1.9), 0),
+            "alcance_30d": int(alcance_30d * rng.uniform(0.6, 1.6)),
+            "nfs": redondea(rng.uniform(-20.0, 28.0)),
+            "anuncios_activos": rng.randint(4, 30),
+            "temas_pauta": list(rng.sample(list(perfil.temas), 3)),
+            "publicaciones": _genera_publicaciones(rng, 120, seguidores),
+        })
+    benchmark = construye_benchmark(actores)
+    tope = int(perfil.lista_nominal * FACTOR_TOPE_PROXY_MXN_POR_ELECTOR)
+    devengado = redondea(tope * rng.uniform(0.5, 0.9), 0)
+
+    identidad = {
+        "eleccion_id": "JAL-DL-08-2027",
+        "cargo": "Diputación Local",
+        "fecha_jornada": "2027-06-06",
+        "fecha_corte": hoy_iso(),
+        "territorio": {
+            "entidad": "Jalisco", "municipio": None, "distrito": perfil.municipio,
+            "lista_nominal": perfil.lista_nominal,
+            "participacion_historica_pct": perfil.participacion_media_pct,
+            "nota": perfil.nota,
+        },
+        "candidato": {
+            "nombre": "Candidatura Consensus", "coalicion": perfil.coalicion,
+            "partidos": list(perfil.partidos), "tope_gastos_campana_mxn": tope,
+        },
+        "calibracion": {
+            "origen": "estimacion",
+            "advertencia": "Valores de calibración para demostración.",
+            "factor_tope_proxy": FACTOR_TOPE_PROXY_MXN_POR_ELECTOR,
+        },
+        "fiscalizacion": construye_fiscalizacion(tope, devengado, gasto_30d),
+    }
+
+    redes = {
+        "kpis": {
+            "audiencia_total": audiencia_final,
+            "engagement_promedio": redondea(
+                statistics.fmean([p["engagement_rate"] for p in serie])),
+            "sentimiento_positivo_pct": positivo_pct,
+            "sentimiento_negativo_pct": negativo_pct,
+            "nfs": calcula_nfs(positivo_pct, negativo_pct),
+            "gasto_ads_acumulado_mxn": redondea(gasto_30d, 0),
+            "anuncios_activos": rng.randint(6, 20),
+            "alcance_30d": alcance_30d,
+            "cpm_mxn": costo_por_mil_alcanzados(gasto_30d, alcance_30d),
+            "share_of_voice_pct": next(
+                (b["share_of_voice_pct"] for b in benchmark if b["es_propio"]), 0.0),
+        },
+        "serie_tiempo": serie,
+        "benchmark": benchmark,
+        "competidores": [
+            {"nombre": b["nombre"], "coalicion": b["coalicion"], "audiencia": b["seguidores"],
+             "engagement_rate": b["engagement_rate"], "gasto_ads_mxn": b["gasto_ads_30d_mxn"],
+             "nfs": b["nfs"]}
+            for b in benchmark if not b["es_propio"]
+        ],
+        "smart_timing": matriz_smart_timing(publicaciones_propias),
+        "alertas": alertas,
+        "topicos": topicos,
+        "origen_serie": "mock",
+    }
+
+    return construye_eleccion(identidad, secciones, redes, parametros)
+
 
 
 # =====================================================================
@@ -1056,6 +1947,9 @@ def construye_parser() -> argparse.ArgumentParser:
                         help="Archivo JSON maestro de salida.")
     parser.add_argument("--semilla", type=int, default=20270606,
                         help="Semilla del generador de demostracion.")
+    parser.add_argument("--por-eleccion", metavar="CARPETA",
+                        help="Ademas del maestro, escribe un archivo por eleccion "
+                             "y un indice ligero en esa carpeta.")
     return parser
 
 
@@ -1068,14 +1962,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.demo:
         elecciones = genera_demo(semilla=args.semilla)
-        fuente = "Datos sinteticos de demostracion"
+        fuente = "Datos sintéticos de demostración"
     else:
         elecciones = procesa_configuracion(args.config, con_red=args.con_red)
         fuente = "INE / IEPC Jalisco"
 
     ruta = escribe_json_maestro(elecciones, args.salida, fuente_primaria=fuente)
+    peso = os.path.getsize(ruta) / 1024.0
 
-    print(f"JSON maestro escrito en: {ruta}")
+    if args.por_eleccion:
+        rutas = escribe_por_eleccion(elecciones, args.por_eleccion, fuente_primaria=fuente)
+        print(f"Paquetes por eleccion escritos en: {args.por_eleccion} "
+              f"({len(rutas)} archivos, indice incluido)")
+
+    print(f"JSON maestro escrito en: {ruta} ({peso:,.0f} KB)")
     for eleccion in elecciones:
         ind = eleccion["indicadores"]
         print(

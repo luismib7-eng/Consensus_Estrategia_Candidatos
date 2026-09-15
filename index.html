@@ -34,11 +34,20 @@
     </div>
   </div>
 
-  <div class="text-right">
-    <p id="contexto-eleccion" class="text-sm" style="color: var(--texto-medio);">Cargando elección</p>
-    <p id="contexto-corte" class="marca-linea">Corte pendiente</p>
+  <div class="flex items-center gap-4">
+    <div class="text-right">
+      <p id="contexto-eleccion" class="text-sm" style="color: var(--texto-medio);">Cargando elección</p>
+      <p id="contexto-corte" class="marca-linea">Corte pendiente</p>
+    </div>
+    <button id="boton-reporte" type="button" class="boton no-imprimir">Exportar reporte ejecutivo</button>
   </div>
 </header>
+
+<!-- Encabezado que solo aparece en papel: identifica territorio y corte -->
+<div class="solo-impresion" aria-hidden="true">
+  <p id="encabezado-impresion"></p>
+  <p id="resumen-impresion"></p>
+</div>
 
 <!-- ============================ Estado de carga ============================ -->
 <div class="contenedor">
@@ -69,6 +78,9 @@
       <span class="control-etiqueta">Fecha de corte</span>
       <input id="campo-corte" type="date" class="campo">
     </label>
+
+    <div id="selector-municipio-rapido" class="flex flex-wrap gap-2 md:col-span-4"
+         aria-label="Cambio rápido de territorio"></div>
   </section>
 
   <!-- Hero: la meta de votos y la brecha que falta por movilizar -->
@@ -109,7 +121,7 @@
   </section>
 
   <!-- Tarjetas de KPI -->
-  <section id="kpis" class="grid gap-4 mt-5 sm:grid-cols-2 xl:grid-cols-4"
+  <section id="kpis" class="grid gap-4 mt-5 sm:grid-cols-2 xl:grid-cols-5"
            aria-label="Indicadores de alto impacto"></section>
 
   <!-- Territorio: cartografía y tabla seccional -->
@@ -125,7 +137,7 @@
         <div class="flex items-center gap-2">
           <input id="buscador-seccion" type="search" class="campo" style="width: 150px;"
                  placeholder="Buscar sección" aria-label="Buscar sección electoral">
-          <button id="boton-exportar" type="button" class="boton">Exportar CSV</button>
+          <button id="boton-exportar" type="button" class="boton no-imprimir">Exportar CSV</button>
         </div>
       </div>
 
@@ -178,6 +190,60 @@
         <p class="panel-nota">Favorabilidad neta</p>
       </div>
       <div id="topicos"></div>
+
+      <div class="panel-cabeza" style="border-top: 1px solid var(--linea-suave);">
+        <h2 class="panel-titulo">Alertas tempranas</h2>
+        <p class="panel-nota" id="contador-alertas"></p>
+      </div>
+      <div id="alertas" class="grid gap-3 px-5 pb-5"></div>
+    </article>
+  </section>
+
+  <!-- Benchmark competitivo y ventanas de publicación -->
+  <section class="grid gap-4 mt-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]"
+           aria-label="Benchmark competitivo">
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Radar competitivo</h2>
+        <p class="panel-nota">Candidatura contra sus dos rivales principales</p>
+      </div>
+      <div id="benchmark"></div>
+      <div class="px-5 pb-5" style="height: 320px;">
+        <canvas id="grafica-radar" aria-label="Comparativo normalizado entre los actores de la conversación"></canvas>
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Mejores horas para publicar</h2>
+        <p class="panel-nota">Tasa de respuesta orgánica</p>
+      </div>
+      <div id="smart-timing" class="pb-5"></div>
+    </article>
+  </section>
+
+  <!-- Auditoría de pauta política y rendimiento por formato -->
+  <section class="grid gap-4 mt-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]"
+           aria-label="Auditoría de pauta política">
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Auditoría de pauta política</h2>
+        <p class="panel-nota">Meta Ad Library · últimos 30 días</p>
+      </div>
+      <div id="auditoria-pauta"></div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-cabeza">
+        <h2 class="panel-titulo">Rendimiento por formato</h2>
+        <p class="panel-nota">Respuesta sobre alcance</p>
+      </div>
+      <div class="px-5 pt-5" style="height: 260px;">
+        <canvas id="grafica-formatos" aria-label="Tasa de respuesta por formato de publicación y actor"></canvas>
+      </div>
+      <p class="panel-nota px-5 py-4" id="nota-formatos"></p>
     </article>
   </section>
 

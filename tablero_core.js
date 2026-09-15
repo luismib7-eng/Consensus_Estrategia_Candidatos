@@ -205,6 +205,26 @@
       campoCorte.min = serie[0].fecha;
       campoCorte.max = serie[serie.length - 1].fecha;
     }
+
+    pintaAccesoRapido();
+  }
+
+  /* Acceso rápido: un toque para saltar entre los territorios del mismo cargo,
+     sin abrir el desplegable. */
+  function pintaAccesoRapido() {
+    var contenedor = vacia($('#selector-municipio-rapido'));
+    var hermanas = eleccionesPorCargo(estado.eleccion.cargo);
+
+    if (hermanas.length < 2) return;
+
+    hermanas.forEach(function (e) {
+      var boton = crear('button', 'filtro');
+      boton.type = 'button';
+      boton.dataset.eleccion = e.eleccion_id;
+      boton.setAttribute('aria-pressed', String(e.eleccion_id === estado.eleccion.eleccion_id));
+      boton.appendChild(document.createTextNode(nombreTerritorio(e)));
+      contenedor.appendChild(boton);
+    });
   }
 
   /* -----------------------------------------------------------------
@@ -314,16 +334,28 @@
         porcentaje(redes.sentimiento_negativo_pct) + ' negativos.'
     }));
 
-    var usoTope = tope ? gasto / tope * 100 : 0;
+    var fisc = e.fiscalizacion || {};
+    var colorSemaforo = fisc.semaforo === 'rojo' ? COLORES.riesgo
+      : fisc.semaforo === 'ambar' ? COLORES.swing : COLORES.ganada;
     contenedor.appendChild(tarjeta({
-      nombre: 'Pauta auditada contra tope INE',
-      valor: pesos(gasto),
-      color: usoTope > 85 ? COLORES.riesgo : COLORES.oro,
-      avance: usoTope,
+      nombre: 'Fiscalización contra tope de campaña',
+      valor: porcentaje(fisc.uso_tope_pct),
+      color: colorSemaforo,
+      avance: fisc.uso_tope_pct,
       pie: tope
-        ? porcentaje(usoTope) + ' del tope de ' + pesos(tope) + ' · ' +
-          entero(redes.anuncios_activos || 0) + ' anuncios en la Ad Library.'
+        ? pesos(fisc.devengado_sif_mxn) + ' devengados de un tope de ' + pesos(tope) +
+          '. Quedan ' + pesos(fisc.disponible_mxn) + '.'
         : 'Sin tope de campaña cargado para esta elección.'
+    }));
+
+    contenedor.appendChild(tarjeta({
+      nombre: 'Pauta digital auditada',
+      valor: pesos(gasto),
+      color: COLORES.oro,
+      avance: fisc.pauta_sobre_devengado_pct,
+      pie: entero(redes.anuncios_activos || 0) + ' anuncios en la Ad Library · ' +
+        pesos(redes.cpm_mxn || 0) + ' por cada mil alcanzados · ' +
+        porcentaje(fisc.pauta_sobre_devengado_pct) + ' del gasto devengado.'
     }));
 
     contenedor.appendChild(tarjeta({
@@ -928,6 +960,453 @@
     }
   }
 
+  /* -----------------------------------------------------------------
+     Radar competitivo: la tabla de benchmark y su lectura normalizada
+     ----------------------------------------------------------------- */
+
+  var EJES_BENCHMARK = [
+    { campo: 'seguidores', titulo: 'Seguidores', formato: entero },
+    { campo: 'crecimiento_7d', titulo: 'Crecimiento 7D', formato: entero },
+    { campo: 'publicaciones_7d', titulo: 'Pub. 7D', formato: entero },
+    { campo: 'engagement_rate', titulo: 'Engagement', formato: porcentaje },
+    { campo: 'share_of_voice_pct', titulo: 'Share of voice', formato: porcentaje },
+    { campo: 'gasto_ads_30d_mxn', titulo: 'Pauta 30D', formato: pesos }
+  ];
+
+  function benchmarkVigente() {
+    var redes = estado.eleccion.redes || {};
+    return (redes.benchmark || []).slice();
+  }
+
+  function pintaBenchmark() {
+    var filas = benchmarkVigente();
+    var contenedor = vacia($('#benchmark'));
+
+    if (!filas.length) {
+      contenedor.appendChild(crear('p', 'estado',
+        'Sin actores cargados para comparar en este territorio.'));
+      return;
+    }
+
+    var tabla = crear('table', 'seccional comparativa');
+    var thead = crear('thead');
+    var filaCabeza = crear('tr');
+    ['Actor'].concat(EJES_BENCHMARK.map(function (eje) { return eje.titulo; }))
+      .concat(['CPM', 'Mejor formato'])
+      .forEach(function (texto) {
+        var th = crear('th', '', texto);
+        th.scope = 'col';
+        th.style.cursor = 'default';
+        filaCabeza.appendChild(th);
+      });
+    thead.appendChild(filaCabeza);
+    tabla.appendChild(thead);
+
+    // Máximo por eje para marcar quién lidera cada métrica.
+    var lideres = {};
+    EJES_BENCHMARK.forEach(function (eje) {
+      lideres[eje.campo] = filas.reduce(function (max, f) {
+        return Math.max(max, Number(f[eje.campo]) || 0);
+      }, 0);
+    });
+
+    var tbody = crear('tbody');
+    filas.forEach(function (f) {
+      var fila = crear('tr', f.es_propio ? 'actor-propio' : '');
+
+      var celdaNombre = crear('td');
+      celdaNombre.appendChild(crear('span', 'actor-nombre', f.nombre));
+      celdaNombre.appendChild(crear('span', 'actor-coalicion', f.coalicion));
+      fila.appendChild(celdaNombre);
+
+      EJES_BENCHMARK.forEach(function (eje) {
+        var valor = Number(f[eje.campo]) || 0;
+        var celda = crear('td', '', eje.formato(valor));
+        if (eje.campo === 'crecimiento_7d' && f.crecimiento_7d_pct) {
+          celda.title = '+' + decimal(f.crecimiento_7d_pct) + '% en siete días';
+        }
+        if (lideres[eje.campo] && valor === lideres[eje.campo] && eje.campo !== 'gasto_ads_30d_mxn') {
+          celda.classList.add('lidera');
+        }
+        fila.appendChild(celda);
+      });
+
+      fila.appendChild(crear('td', '', pesos(f.cpm_mxn)));
+
+      var celdaFormato = crear('td');
+      if (f.mejor_formato) {
+        celdaFormato.appendChild(crear('span', 'etiqueta-formato', f.mejor_formato));
+      } else {
+        celdaFormato.textContent = '—';
+      }
+      fila.appendChild(celdaFormato);
+
+      tbody.appendChild(fila);
+    });
+    tabla.appendChild(tbody);
+    contenedor.appendChild(tabla);
+
+    var propio = filas.filter(function (f) { return f.es_propio; })[0];
+    if (propio) {
+      var lectura = propio.posicion_sov === 1
+        ? 'La candidatura encabeza la conversación con ' +
+          porcentaje(propio.share_of_voice_pct) + ' del volumen municipal.'
+        : 'La candidatura ocupa el lugar ' + propio.posicion_sov + ' en share of voice, con ' +
+          porcentaje(propio.share_of_voice_pct) + ' frente al ' +
+          porcentaje(filas[0].share_of_voice_pct) + ' de ' + filas[0].nombre + '.';
+      contenedor.appendChild(crear('p', 'panel-nota px-5 py-4', lectura));
+    }
+  }
+
+  function pintaRadar() {
+    var filas = benchmarkVigente();
+    if (!filas.length) return;
+
+    // Cada eje se normaliza contra el líder de esa métrica: el radar compara
+    // posiciones relativas, no magnitudes de distinta unidad.
+    var topes = {};
+    EJES_BENCHMARK.forEach(function (eje) {
+      topes[eje.campo] = filas.reduce(function (max, f) {
+        return Math.max(max, Number(f[eje.campo]) || 0);
+      }, 0) || 1;
+    });
+
+    var paleta = [COLORES.oro, COLORES.cian, '#8f7ae5'];
+    var datasets = filas.map(function (f, i) {
+      var color = f.es_propio ? COLORES.oro : paleta[(i % (paleta.length - 1)) + 1];
+      return {
+        label: f.nombre,
+        data: EJES_BENCHMARK.map(function (eje) {
+          return Math.round((Number(f[eje.campo]) || 0) / topes[eje.campo] * 100);
+        }),
+        borderColor: color,
+        backgroundColor: f.es_propio ? 'rgba(216,169,59,0.22)' : 'transparent',
+        borderWidth: f.es_propio ? 2.5 : 1.6,
+        pointBackgroundColor: color,
+        pointRadius: 3
+      };
+    });
+
+    var datos = {
+      labels: EJES_BENCHMARK.map(function (eje) { return eje.titulo; }),
+      datasets: datasets
+    };
+
+    var opciones = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: { color: COLORES.medio, boxWidth: 10, usePointStyle: true }
+        },
+        tooltip: {
+          backgroundColor: '#0e1729',
+          borderColor: COLORES.linea,
+          borderWidth: 1,
+          titleColor: COLORES.texto,
+          bodyColor: COLORES.medio,
+          callbacks: {
+            label: function (ctx) {
+              var eje = EJES_BENCHMARK[ctx.dataIndex];
+              var fila = filas[ctx.datasetIndex];
+              return ctx.dataset.label + ': ' + eje.formato(fila[eje.campo]) +
+                ' (' + ctx.formattedValue + ' de 100 contra el líder)';
+            }
+          }
+        }
+      },
+      scales: {
+        r: {
+          min: 0,
+          max: 100,
+          angleLines: { color: 'rgba(34,49,79,0.8)' },
+          grid: { color: 'rgba(34,49,79,0.8)' },
+          pointLabels: { color: COLORES.medio, font: { size: 11 } },
+          ticks: { display: false }
+        }
+      }
+    };
+
+    if (estado.graficas.radar) {
+      estado.graficas.radar.data = datos;
+      estado.graficas.radar.options = opciones;
+      estado.graficas.radar.update();
+    } else {
+      estado.graficas.radar = new Chart($('#grafica-radar'), {
+        type: 'radar', data: datos, options: opciones
+      });
+    }
+  }
+
+  /* -----------------------------------------------------------------
+     Auditoría de pauta política: Ad Library cruzada con el tope del SIF
+     ----------------------------------------------------------------- */
+
+  function pintaAuditoriaPauta() {
+    var filas = benchmarkVigente();
+    var contenedor = vacia($('#auditoria-pauta'));
+
+    if (!filas.length) {
+      contenedor.appendChild(crear('p', 'estado',
+        'Sin actores cargados para auditar la pauta de este territorio.'));
+      return;
+    }
+
+    var ordenadas = filas.slice().sort(function (a, b) {
+      return (b.gasto_ads_30d_mxn || 0) - (a.gasto_ads_30d_mxn || 0);
+    });
+    var lider = ordenadas[0].gasto_ads_30d_mxn || 1;
+
+    var tabla = crear('table', 'seccional comparativa');
+    var thead = crear('thead');
+    var filaCabeza = crear('tr');
+    ['Actor', 'Pauta 30D', 'Reparto', 'Anuncios', 'CPM', 'Temas pautados']
+      .forEach(function (texto) {
+        var th = crear('th', '', texto);
+        th.scope = 'col';
+        th.style.cursor = 'default';
+        filaCabeza.appendChild(th);
+      });
+    thead.appendChild(filaCabeza);
+    tabla.appendChild(thead);
+
+    var tbody = crear('tbody');
+    ordenadas.forEach(function (f) {
+      var fila = crear('tr', f.es_propio ? 'actor-propio' : '');
+
+      var celdaNombre = crear('td');
+      celdaNombre.appendChild(crear('span', 'actor-nombre', f.nombre));
+      celdaNombre.appendChild(crear('span', 'actor-coalicion', f.coalicion));
+      fila.appendChild(celdaNombre);
+
+      fila.appendChild(crear('td', '', pesos(f.gasto_ads_30d_mxn)));
+
+      var celdaBarra = crear('td');
+      var barra = crear('div', 'barra');
+      var relleno = crear('i');
+      relleno.style.width = limita((f.gasto_ads_30d_mxn || 0) / lider * 100, 0, 100) + '%';
+      relleno.style.background = f.es_propio ? COLORES.oro : COLORES.cian;
+      barra.appendChild(relleno);
+      celdaBarra.appendChild(barra);
+      fila.appendChild(celdaBarra);
+
+      fila.appendChild(crear('td', '', entero(f.anuncios_activos)));
+      fila.appendChild(crear('td', '', pesos(f.cpm_mxn)));
+
+      var celdaTemas = crear('td', 'temas');
+      (f.temas_pauta || []).forEach(function (tema) {
+        celdaTemas.appendChild(crear('span', 'etiqueta-tema', tema));
+      });
+      if (!(f.temas_pauta || []).length) celdaTemas.textContent = 'Sin clasificar';
+      fila.appendChild(celdaTemas);
+
+      tbody.appendChild(fila);
+    });
+    tabla.appendChild(tbody);
+    contenedor.appendChild(tabla);
+
+    var fisc = estado.eleccion.fiscalizacion || {};
+    var propio = filas.filter(function (f) { return f.es_propio; })[0];
+    if (propio) {
+      var texto = 'La pauta digital representa ' +
+        porcentaje(fisc.pauta_sobre_devengado_pct) +
+        ' del gasto devengado ante el SIF. ';
+      texto += propio.gasto_ads_30d_mxn >= lider
+        ? 'La candidatura encabeza la inversión declarada en la Ad Library.'
+        : 'La mayor inversión declarada es de ' + ordenadas[0].nombre + ', con ' +
+          pesos(ordenadas[0].gasto_ads_30d_mxn) + '.';
+      contenedor.appendChild(crear('p', 'panel-nota px-5 py-4', texto));
+    }
+  }
+
+  /* -----------------------------------------------------------------
+     Rendimiento por formato: qué funciona a cada quién
+     ----------------------------------------------------------------- */
+
+  var ORDEN_FORMATOS = ['Reel', 'Imagen', 'Carrusel', 'Video largo'];
+
+  function pintaFormatos() {
+    var filas = benchmarkVigente();
+    if (!filas.length) return;
+
+    var etiquetas = ORDEN_FORMATOS.filter(function (nombre) {
+      return filas.some(function (f) {
+        return (f.formatos || []).some(function (x) { return x.formato === nombre; });
+      });
+    });
+
+    var paleta = [COLORES.oro, COLORES.cian, '#8f7ae5'];
+    var datasets = filas.map(function (f, i) {
+      var color = f.es_propio ? COLORES.oro : paleta[(i % (paleta.length - 1)) + 1];
+      return {
+        label: f.nombre,
+        data: etiquetas.map(function (nombre) {
+          var encontrado = (f.formatos || []).filter(function (x) {
+            return x.formato === nombre;
+          })[0];
+          return encontrado ? encontrado.tasa_respuesta : 0;
+        }),
+        backgroundColor: color,
+        borderRadius: 3
+      };
+    });
+
+    var opciones = opcionesBase();
+    opciones.scales.y = {
+      title: { display: true, text: 'Tasa de respuesta (%)', color: COLORES.tenue },
+      ticks: { color: COLORES.tenue, callback: function (v) { return decimal(v) + '%'; } },
+      grid: { color: 'rgba(34,49,79,0.45)' }
+    };
+
+    var datos = { labels: etiquetas, datasets: datasets };
+
+    if (estado.graficas.formatos) {
+      estado.graficas.formatos.data = datos;
+      estado.graficas.formatos.options = opciones;
+      estado.graficas.formatos.update();
+    } else {
+      estado.graficas.formatos = new Chart($('#grafica-formatos'), {
+        type: 'bar', data: datos, options: opciones
+      });
+    }
+
+    var propio = filas.filter(function (f) { return f.es_propio; })[0];
+    var nota = $('#nota-formatos');
+    if (propio && propio.mejor_formato) {
+      var mejor = (propio.formatos || []).filter(function (x) { return x.es_mejor; })[0];
+      nota.textContent = 'El formato que mejor responde a la candidatura es ' +
+        propio.mejor_formato.toLowerCase() + ', con ' + decimal(mejor.tasa_respuesta) +
+        '% de respuesta sobre alcance y ' + entero(mejor.interacciones_por_publicacion) +
+        ' interacciones por publicación.';
+    } else {
+      nota.textContent = 'Sin publicaciones clasificadas por formato.';
+    }
+  }
+
+  /* -----------------------------------------------------------------
+     Smart timing: mapa de calor de respuesta por día y hora
+     ----------------------------------------------------------------- */
+
+  function pintaSmartTiming() {
+    var timing = (estado.eleccion.redes || {}).smart_timing || {};
+    var matriz = timing.matriz || [];
+    var contenedor = vacia($('#smart-timing'));
+
+    if (!matriz.length) {
+      contenedor.appendChild(crear('p', 'estado',
+        'Sin publicaciones suficientes para calcular las mejores franjas.'));
+      return;
+    }
+
+    var maximo = Number(timing.maximo) || 1;
+    var dias = timing.dias || ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+
+    var rejilla = crear('div', 'calor');
+
+    // Esquina vacía y regla horaria: solo se rotulan las horas pares para
+    // que la escala siga siendo legible en pantallas angostas.
+    rejilla.appendChild(crear('span', 'calor-esquina'));
+    for (var h = 0; h < 24; h++) {
+      rejilla.appendChild(crear('span', 'calor-hora', h % 3 === 0 ? String(h) : ''));
+    }
+
+    matriz.forEach(function (fila, indiceDia) {
+      rejilla.appendChild(crear('span', 'calor-dia', dias[indiceDia].slice(0, 3)));
+      fila.forEach(function (valor, hora) {
+        var intensidad = maximo ? Math.min(valor / maximo, 1) : 0;
+        var celda = crear('span', 'calor-celda');
+        celda.style.background = valor > 0
+          ? 'rgba(63,210,226,' + (0.08 + intensidad * 0.82).toFixed(3) + ')'
+          : 'var(--pizarra-alta)';
+        celda.title = dias[indiceDia] + ' ' + hora + ':00 · tasa de respuesta ' +
+          (valor > 0 ? decimal(valor) + '%' : 'sin publicaciones');
+        rejilla.appendChild(celda);
+      });
+    });
+
+    contenedor.appendChild(rejilla);
+
+    var franjas = timing.franjas || [];
+    if (franjas.length) {
+      var tira = crear('div', 'tira-franjas');
+      franjas.forEach(function (f) {
+        var bloque = crear('div', 'franja-bloque' + (f.es_mejor ? ' franja-mejor' : ''));
+        bloque.appendChild(crear('span', 'franja-nombre', f.franja));
+        bloque.appendChild(crear('b', 'cifra', decimal(f.tasa_respuesta) + '%'));
+        bloque.appendChild(crear('span', 'franja-rango', f.rango));
+        bloque.title = entero(f.publicaciones) + ' publicaciones · ' +
+          entero(f.interacciones) + ' interacciones';
+        tira.appendChild(bloque);
+      });
+      contenedor.appendChild(tira);
+    }
+
+    var mejores = timing.mejores_franjas || [];
+    if (mejores.length) {
+      var lista = crear('ul', 'franjas');
+      mejores.slice(0, 5).forEach(function (franja) {
+        var item = crear('li');
+        item.appendChild(crear('span', 'franja-hora',
+          franja.dia_nombre + ' ' + franja.hora + ':00'));
+        item.appendChild(crear('span', 'franja-tasa', decimal(franja.tasa_respuesta) + '%'));
+        lista.appendChild(item);
+      });
+      contenedor.appendChild(crear('p', 'panel-nota px-5 pt-4',
+        'Mejores franjas para publicar y para convocar, sobre ' +
+        entero(timing.publicaciones_analizadas) + ' publicaciones analizadas.'));
+      contenedor.appendChild(lista);
+    }
+  }
+
+  /* -----------------------------------------------------------------
+     Alertas tempranas
+     ----------------------------------------------------------------- */
+
+  var TIPOS_ALERTA = {
+    ataque_coordinado: 'Ataque coordinado',
+    crisis_tematica: 'Crisis temática',
+    anomalia_cuentas: 'Anomalía de cuentas'
+  };
+
+  function pintaAlertas() {
+    var alertas = ((estado.eleccion.redes || {}).alertas || []);
+    var contenedor = vacia($('#alertas'));
+    var contador = $('#contador-alertas');
+
+    var altas = alertas.filter(function (a) { return a.severidad === 'alta'; }).length;
+    contador.textContent = alertas.length
+      ? entero(alertas.length) + (alertas.length === 1 ? ' alerta' : ' alertas') +
+        (altas ? ' · ' + entero(altas) + ' de severidad alta' : '')
+      : 'Sin señales atípicas';
+    contador.style.color = altas ? COLORES.riesgo : COLORES.tenue;
+
+    if (!alertas.length) {
+      contenedor.appendChild(crear('p', 'estado',
+        'La conversación se comporta dentro de lo esperado. El detector avisa cuando un tema rompe su propia media o se concentran cuentas recién creadas.'));
+      return;
+    }
+
+    alertas.forEach(function (alerta) {
+      var caja = crear('article', 'alerta alerta-' + alerta.severidad);
+
+      var cabeza = crear('div', 'alerta-cabeza');
+      cabeza.appendChild(crear('span', 'alerta-tipo',
+        TIPOS_ALERTA[alerta.tipo] || alerta.tipo));
+      cabeza.appendChild(crear('span', 'alerta-fecha', fechaLarga(alerta.fecha)));
+      caja.appendChild(cabeza);
+
+      caja.appendChild(crear('p', 'alerta-titulo', alerta.titulo));
+
+      var evidencia = crear('ul', 'alerta-evidencia');
+      (alerta.evidencia || []).forEach(function (linea) {
+        evidencia.appendChild(crear('li', '', linea));
+      });
+      caja.appendChild(evidencia);
+
+      contenedor.appendChild(caja);
+    });
+  }
+
   function colorSentimiento(nfs) {
     if (nfs >= 10) return COLORES.ganada;
     if (nfs >= -10) return COLORES.swing;
@@ -951,8 +1430,12 @@
 
       var izquierda = crear('div');
       izquierda.appendChild(crear('p', 'topico-nombre', t.tema));
-      izquierda.appendChild(crear('p', 'topico-meta',
-        entero(t.menciones) + ' menciones · tendencia ' + (t.tendencia || 'sin definir')));
+      var detalle = entero(t.menciones) + ' menciones · tendencia ' +
+        (t.tendencia || 'sin definir');
+      if (t.cuentas_nuevas_pct) {
+        detalle += ' · ' + decimal(t.cuentas_nuevas_pct) + '% de cuentas nuevas';
+      }
+      izquierda.appendChild(crear('p', 'topico-meta', detalle));
       fila.appendChild(izquierda);
 
       var semaforo = crear('div', 'semaforo');
@@ -1002,6 +1485,12 @@
     pintaCartografia();
     pintaGraficaCompetidores();
     pintaGraficaTrayectoria();
+    pintaBenchmark();
+    pintaRadar();
+    pintaAuditoriaPauta();
+    pintaFormatos();
+    pintaSmartTiming();
+    pintaAlertas();
     pintaTopicos();
   }
 
@@ -1048,6 +1537,11 @@
       pintaGraficaTrayectoria();
     });
 
+    $('#selector-municipio-rapido').addEventListener('click', function (ev) {
+      var boton = ev.target.closest('[data-eleccion]');
+      if (boton) seleccionaEleccion(boton.dataset.eleccion);
+    });
+
     var buscador = $('#buscador-seccion');
     buscador.addEventListener('input', function (ev) {
       estado.busqueda = ev.target.value;
@@ -1056,6 +1550,7 @@
     });
 
     $('#boton-exportar').addEventListener('click', exportaCsv);
+    $('#boton-reporte').addEventListener('click', imprimeReporte);
   }
 
   /* -----------------------------------------------------------------
@@ -1086,6 +1581,36 @@
     enlace.click();
     document.body.removeChild(enlace);
     URL.revokeObjectURL(enlace.href);
+  }
+
+  /* -----------------------------------------------------------------
+     Reporte ejecutivo: la vista impresa del territorio abierto
+     ----------------------------------------------------------------- */
+
+  function imprimeReporte() {
+    var e = estado.eleccion;
+    var ind = e.indicadores || {};
+    var fisc = e.fiscalizacion || {};
+
+    // El pie impreso fija de qué territorio y de qué corte habla el papel,
+    // porque una hoja suelta sin encabezado no sirve en una mesa de trabajo.
+    $('#encabezado-impresion').textContent =
+      'Consensus Estrategia · ' + e.cargo + ' · ' + nombreTerritorio(e) +
+      ' · corte al ' + fechaLarga(estado.fechaCorte);
+
+    $('#resumen-impresion').textContent =
+      'Meta de ' + entero((e.candidato || {}).meta_votos) + ' votos sobre una lista nominal de ' +
+      entero((e.territorio || {}).lista_nominal) + '. ' +
+      entero(ind.casillas_swing) + ' secciones competidas y ' + entero(ind.casillas_riesgo) +
+      ' en riesgo. Gasto devengado al ' + porcentaje(fisc.uso_tope_pct) + ' del tope de campaña.';
+
+    // La tabla seccional se imprime completa: en pantalla vive dentro de un
+    // contenedor con desplazamiento que cortaría el papel en la primera página.
+    document.body.classList.add('imprimiendo');
+    window.print();
+    window.setTimeout(function () {
+      document.body.classList.remove('imprimiendo');
+    }, 500);
   }
 
   /* -----------------------------------------------------------------
