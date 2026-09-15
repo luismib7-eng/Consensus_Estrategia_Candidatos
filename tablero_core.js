@@ -103,6 +103,30 @@
      Carga del paquete de datos
      ----------------------------------------------------------------- */
 
+  var ESPERA_MAXIMA_MS = 6000;
+
+  /* El respaldo embebido (data_fallback.js) permite abrir el tablero con doble
+     clic. Bajo file:// el navegador bloquea la lectura del JSON por política de
+     origen, así que ni siquiera se intenta: se va directo al respaldo. */
+  function hayRespaldo() {
+    return !!(global.DATA_FALLBACK && global.DATA_FALLBACK.elecciones);
+  }
+
+  function conTiempoLimite(promesa, ms) {
+    return new Promise(function (resolver, rechazar) {
+      var reloj = global.setTimeout(function () {
+        rechazar(new Error('La carga excedió ' + (ms / 1000) + ' segundos.'));
+      }, ms);
+      promesa.then(function (valor) {
+        global.clearTimeout(reloj);
+        resolver(valor);
+      }, function (error) {
+        global.clearTimeout(reloj);
+        rechazar(error);
+      });
+    });
+  }
+
   function resuelveFuente(fuente) {
     if (typeof fuente === 'function') {
       return Promise.resolve().then(fuente);
@@ -110,12 +134,41 @@
     if (fuente && typeof fuente === 'object') {
       return Promise.resolve(fuente);
     }
+
     var url = fuente || FUENTE_POR_DEFECTO;
-    return fetch(url, { cache: 'no-store' }).then(function (respuesta) {
+    var protocoloLocal = global.location && global.location.protocol === 'file:';
+
+    if (protocoloLocal && hayRespaldo()) {
+      estado.usandoRespaldo = true;
+      estado.motivoRespaldo = 'El archivo se abrió sin servidor, así que el tablero ' +
+        'trabaja con la muestra embebida.';
+      return Promise.resolve(global.DATA_FALLBACK);
+    }
+
+    if (typeof fetch !== 'function') {
+      if (hayRespaldo()) {
+        estado.usandoRespaldo = true;
+        estado.motivoRespaldo = 'Este navegador no puede leer el archivo de datos.';
+        return Promise.resolve(global.DATA_FALLBACK);
+      }
+      return Promise.reject(new Error('Este navegador no permite leer el archivo de datos.'));
+    }
+
+    var peticion = fetch(url, { cache: 'no-store' }).then(function (respuesta) {
       if (!respuesta.ok) {
         throw new Error('El servidor respondió ' + respuesta.status + ' al pedir ' + url);
       }
       return respuesta.json();
+    });
+
+    return conTiempoLimite(peticion, ESPERA_MAXIMA_MS).catch(function (error) {
+      if (hayRespaldo()) {
+        estado.usandoRespaldo = true;
+        estado.motivoRespaldo = 'No se pudo leer ' + url + ' (' + error.message +
+          '), así que el tablero trabaja con la muestra embebida.';
+        return global.DATA_FALLBACK;
+      }
+      throw error;
     });
   }
 
@@ -145,7 +198,10 @@
     seccionActiva: null,
     fechaCorte: null,
     graficas: {},
-    geojson: {}
+    geojson: {},
+    usandoRespaldo: false,
+    motivoRespaldo: null,
+    precandidatos: []
   };
 
   /* -----------------------------------------------------------------
@@ -975,7 +1031,18 @@
 
   function benchmarkVigente() {
     var redes = estado.eleccion.redes || {};
-    return (redes.benchmark || []).slice();
+    return (redes.benchmark || []).slice().concat(filasEnMonitoreo());
+  }
+
+  /* Solo las filas con métricas entran a las gráficas; las que están en
+     monitoreo aparecen en las tablas con guiones, no con ceros que parecerían
+     un desempeño nulo. */
+  function conMetricas(filas) {
+    return filas.filter(function (f) { return !f.en_monitoreo; });
+  }
+
+  function celdaValor(valor, formateador) {
+    return (valor === null || valor === undefined) ? '—' : formateador(valor);
   }
 
   function pintaBenchmark() {
@@ -1012,32 +1079,39 @@
 
     var tbody = crear('tbody');
     filas.forEach(function (f) {
-      var fila = crear('tr', f.es_propio ? 'actor-propio' : '');
+      var fila = crear('tr', f.es_propio ? 'actor-propio'
+        : f.en_monitoreo ? 'actor-monitoreo' : '');
 
       var celdaNombre = crear('td');
       celdaNombre.appendChild(crear('span', 'actor-nombre', f.nombre));
-      celdaNombre.appendChild(crear('span', 'actor-coalicion', f.coalicion));
+      celdaNombre.appendChild(crear('span', 'actor-coalicion',
+        f.en_monitoreo ? f.coalicion + ' · en monitoreo' : f.coalicion));
       fila.appendChild(celdaNombre);
 
       EJES_BENCHMARK.forEach(function (eje) {
-        var valor = Number(f[eje.campo]) || 0;
-        var celda = crear('td', '', eje.formato(valor));
+        var bruto = f[eje.campo];
+        var valor = Number(bruto) || 0;
+        var celda = crear('td', '', celdaValor(bruto, eje.formato));
         if (eje.campo === 'crecimiento_7d' && f.crecimiento_7d_pct) {
           celda.title = '+' + decimal(f.crecimiento_7d_pct) + '% en siete días';
         }
-        if (lideres[eje.campo] && valor === lideres[eje.campo] && eje.campo !== 'gasto_ads_30d_mxn') {
+        if (bruto !== null && bruto !== undefined && lideres[eje.campo] &&
+            valor === lideres[eje.campo] && eje.campo !== 'gasto_ads_30d_mxn') {
           celda.classList.add('lidera');
         }
         fila.appendChild(celda);
       });
 
-      fila.appendChild(crear('td', '', pesos(f.cpm_mxn)));
+      fila.appendChild(crear('td', '', celdaValor(f.cpm_mxn, pesos)));
 
       var celdaFormato = crear('td');
       if (f.mejor_formato) {
         celdaFormato.appendChild(crear('span', 'etiqueta-formato', f.mejor_formato));
       } else {
         celdaFormato.textContent = '—';
+      }
+      if (f.en_monitoreo) {
+        celdaFormato.title = 'Pendiente de la primera corrida del tracker.';
       }
       fila.appendChild(celdaFormato);
 
@@ -1046,20 +1120,28 @@
     tabla.appendChild(tbody);
     contenedor.appendChild(tabla);
 
-    var propio = filas.filter(function (f) { return f.es_propio; })[0];
+    var medibles = conMetricas(filas);
+    var propio = medibles.filter(function (f) { return f.es_propio; })[0];
+    var enMonitoreo = filas.length - medibles.length;
     if (propio) {
       var lectura = propio.posicion_sov === 1
         ? 'La candidatura encabeza la conversación con ' +
           porcentaje(propio.share_of_voice_pct) + ' del volumen municipal.'
         : 'La candidatura ocupa el lugar ' + propio.posicion_sov + ' en share of voice, con ' +
           porcentaje(propio.share_of_voice_pct) + ' frente al ' +
-          porcentaje(filas[0].share_of_voice_pct) + ' de ' + filas[0].nombre + '.';
+          porcentaje(medibles[0].share_of_voice_pct) + ' de ' + medibles[0].nombre + '.';
+      if (enMonitoreo) {
+        lectura += ' ' + entero(enMonitoreo) +
+          (enMonitoreo === 1 ? ' aspirante registrado espera'
+                             : ' aspirantes registrados esperan') +
+          ' la primera corrida del tracker.';
+      }
       contenedor.appendChild(crear('p', 'panel-nota px-5 py-4', lectura));
     }
   }
 
   function pintaRadar() {
-    var filas = benchmarkVigente();
+    var filas = conMetricas(benchmarkVigente());
     if (!filas.length) return;
 
     // Cada eje se normaliza contra el líder de esa métrica: el radar compara
@@ -1153,6 +1235,7 @@
     }
 
     var ordenadas = filas.slice().sort(function (a, b) {
+      if (!!a.en_monitoreo !== !!b.en_monitoreo) return a.en_monitoreo ? 1 : -1;
       return (b.gasto_ads_30d_mxn || 0) - (a.gasto_ads_30d_mxn || 0);
     });
     var lider = ordenadas[0].gasto_ads_30d_mxn || 1;
@@ -1172,14 +1255,16 @@
 
     var tbody = crear('tbody');
     ordenadas.forEach(function (f) {
-      var fila = crear('tr', f.es_propio ? 'actor-propio' : '');
+      var fila = crear('tr', f.es_propio ? 'actor-propio'
+        : f.en_monitoreo ? 'actor-monitoreo' : '');
 
       var celdaNombre = crear('td');
       celdaNombre.appendChild(crear('span', 'actor-nombre', f.nombre));
-      celdaNombre.appendChild(crear('span', 'actor-coalicion', f.coalicion));
+      celdaNombre.appendChild(crear('span', 'actor-coalicion',
+        f.en_monitoreo ? f.coalicion + ' · en monitoreo' : f.coalicion));
       fila.appendChild(celdaNombre);
 
-      fila.appendChild(crear('td', '', pesos(f.gasto_ads_30d_mxn)));
+      fila.appendChild(crear('td', '', celdaValor(f.gasto_ads_30d_mxn, pesos)));
 
       var celdaBarra = crear('td');
       var barra = crear('div', 'barra');
@@ -1190,14 +1275,18 @@
       celdaBarra.appendChild(barra);
       fila.appendChild(celdaBarra);
 
-      fila.appendChild(crear('td', '', entero(f.anuncios_activos)));
-      fila.appendChild(crear('td', '', pesos(f.cpm_mxn)));
+      fila.appendChild(crear('td', '', celdaValor(f.anuncios_activos, entero)));
+      fila.appendChild(crear('td', '', celdaValor(f.cpm_mxn, pesos)));
 
       var celdaTemas = crear('td', 'temas');
       (f.temas_pauta || []).forEach(function (tema) {
         celdaTemas.appendChild(crear('span', 'etiqueta-tema', tema));
       });
-      if (!(f.temas_pauta || []).length) celdaTemas.textContent = 'Sin clasificar';
+      if (!(f.temas_pauta || []).length) {
+        celdaTemas.textContent = f.en_monitoreo
+          ? 'Pendiente de la primera corrida del tracker'
+          : 'Sin clasificar';
+      }
       fila.appendChild(celdaTemas);
 
       tbody.appendChild(fila);
@@ -1206,7 +1295,7 @@
     contenedor.appendChild(tabla);
 
     var fisc = estado.eleccion.fiscalizacion || {};
-    var propio = filas.filter(function (f) { return f.es_propio; })[0];
+    var propio = conMetricas(filas).filter(function (f) { return f.es_propio; })[0];
     if (propio) {
       var texto = 'La pauta digital representa ' +
         porcentaje(fisc.pauta_sobre_devengado_pct) +
@@ -1226,7 +1315,7 @@
   var ORDEN_FORMATOS = ['Reel', 'Imagen', 'Carrusel', 'Video largo'];
 
   function pintaFormatos() {
-    var filas = benchmarkVigente();
+    var filas = conMetricas(benchmarkVigente());
     if (!filas.length) return;
 
     var etiquetas = ORDEN_FORMATOS.filter(function (nombre) {
@@ -1407,6 +1496,322 @@
     });
   }
 
+  /* -----------------------------------------------------------------
+     CRM de precandidatos: alta, persistencia local y configuración de
+     monitoreo que consume el tracker en Python.
+     ----------------------------------------------------------------- */
+
+  var LLAVE_ALMACEN = 'consensus.precandidatos.v1';
+
+  var CARGOS = ['Presidencia Municipal', 'Diputación Local',
+                'Diputación Federal', 'Senaduría'];
+
+  var TERRITORIOS_JALISCO = ['Guadalajara', 'Zapopan', 'San Pedro Tlaquepaque',
+                             'Tlajomulco de Zúñiga', 'Tonalá', 'El Salto',
+                             'Puerto Vallarta'];
+
+  var CAMPOS_REDES = [
+    { campo: 'facebook', etiqueta: 'Facebook Page ID o URL', ejemplo: '1234567890 o facebook.com/pagina' },
+    { campo: 'instagram', etiqueta: 'Instagram', ejemplo: '@usuario' },
+    { campo: 'x', etiqueta: 'X (Twitter)', ejemplo: '@usuario' },
+    { campo: 'tiktok', etiqueta: 'TikTok', ejemplo: '@usuario' },
+    { campo: 'ad_library_id', etiqueta: 'ID de Meta Ad Library', ejemplo: 'Page ID del anunciante' }
+  ];
+
+  function leePrecandidatos() {
+    try {
+      var crudo = global.localStorage.getItem(LLAVE_ALMACEN);
+      var lista = crudo ? JSON.parse(crudo) : [];
+      return Array.isArray(lista) ? lista : [];
+    } catch (error) {
+      // Navegación privada o almacenamiento bloqueado: el tablero sigue
+      // funcionando, solo que el registro no sobrevive a la recarga.
+      return [];
+    }
+  }
+
+  function guardaPrecandidatos(lista) {
+    estado.precandidatos = lista;
+    try {
+      global.localStorage.setItem(LLAVE_ALMACEN, JSON.stringify(lista));
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function normalizaHandle(valor) {
+    return String(valor || '').trim().replace(/^@/, '');
+  }
+
+  function precandidatosDe(eleccion) {
+    var territorio = nombreTerritorio(eleccion);
+    return estado.precandidatos.filter(function (p) {
+      return p.territorio === territorio && p.cargo === eleccion.cargo;
+    });
+  }
+
+  function pintaPrecandidatosRegistrados() {
+    var contenedor = vacia($('#lista-precandidatos'));
+    var lista = estado.precandidatos;
+    var contador = $('#contador-precandidatos');
+
+    contador.textContent = lista.length
+      ? entero(lista.length) + (lista.length === 1 ? ' registrado' : ' registrados')
+      : 'Ninguno registrado';
+
+    if (!lista.length) {
+      contenedor.appendChild(crear('p', 'estado',
+        'Registra a los aspirantes que quieras auditar. Cada uno se suma al radar competitivo de su territorio y entra en la configuración de monitoreo que lee el tracker.'));
+      return;
+    }
+
+    lista.forEach(function (p) {
+      var ficha = crear('article', 'ficha-precandidato');
+
+      var cabeza = crear('div', 'ficha-cabeza');
+      var identidad = crear('div');
+      identidad.appendChild(crear('p', 'ficha-nombre', p.nombre));
+      identidad.appendChild(crear('p', 'ficha-meta',
+        [p.cargo, p.territorio, p.entidad, p.partido].filter(Boolean).join(' · ')));
+      cabeza.appendChild(identidad);
+
+      var quitar = crear('button', 'boton boton-sutil', 'Quitar');
+      quitar.type = 'button';
+      quitar.addEventListener('click', function () {
+        guardaPrecandidatos(estado.precandidatos.filter(function (otro) {
+          return otro.id !== p.id;
+        }));
+        pintaPrecandidatosRegistrados();
+        pintaBenchmark();
+        pintaAuditoriaPauta();
+      });
+      cabeza.appendChild(quitar);
+      ficha.appendChild(cabeza);
+
+      var cuentas = crear('div', 'ficha-cuentas');
+      CAMPOS_REDES.forEach(function (definicion) {
+        var valor = p.redes && p.redes[definicion.campo];
+        if (!valor) return;
+        var etiqueta = crear('span', 'etiqueta-tema',
+          definicion.etiqueta.split(' ')[0] + ': ' + valor);
+        cuentas.appendChild(etiqueta);
+      });
+      if (!cuentas.childNodes.length) {
+        cuentas.appendChild(crear('span', 'ficha-meta', 'Sin cuentas capturadas'));
+      }
+      ficha.appendChild(cuentas);
+
+      contenedor.appendChild(ficha);
+    });
+  }
+
+  function construyeFormulario() {
+    var formulario = vacia($('#formulario-precandidato'));
+
+    function control(etiqueta, nodo) {
+      var envoltura = crear('label', 'control');
+      envoltura.appendChild(crear('span', 'control-etiqueta', etiqueta));
+      envoltura.appendChild(nodo);
+      return envoltura;
+    }
+
+    function entrada(nombre, marcador) {
+      var campo = crear('input', 'campo');
+      campo.type = 'text';
+      campo.name = nombre;
+      campo.placeholder = marcador || '';
+      campo.autocomplete = 'off';
+      return campo;
+    }
+
+    formulario.appendChild(control('Nombre completo',
+      entrada('nombre', 'Nombre de la persona aspirante')));
+
+    var selCargo = crear('select', 'campo');
+    selCargo.name = 'cargo';
+    CARGOS.forEach(function (cargo) { selCargo.appendChild(opcion(cargo, cargo)); });
+    formulario.appendChild(control('Cargo', selCargo));
+
+    var campoEntidad = entrada('entidad', 'Jalisco');
+    campoEntidad.value = 'Jalisco';
+    formulario.appendChild(control('Entidad', campoEntidad));
+
+    var selTerritorio = crear('select', 'campo');
+    selTerritorio.name = 'territorio';
+    TERRITORIOS_JALISCO.forEach(function (nombre) {
+      selTerritorio.appendChild(opcion(nombre, nombre));
+    });
+    selTerritorio.appendChild(opcion('__manual__', 'Otro municipio o distrito'));
+    formulario.appendChild(control('Municipio o distrito', selTerritorio));
+
+    // La captura manual cubre el resto del país sin tocar el catálogo.
+    var manual = entrada('territorio_manual', 'Escribe el municipio o distrito');
+    var controlManual = control('Nombre del territorio', manual);
+    controlManual.hidden = true;
+    selTerritorio.addEventListener('change', function () {
+      controlManual.hidden = selTerritorio.value !== '__manual__';
+      if (!controlManual.hidden) manual.focus();
+    });
+    formulario.appendChild(controlManual);
+
+    formulario.appendChild(control('Partido o coalición',
+      entrada('partido', 'Partido, coalición o candidatura independiente')));
+
+    CAMPOS_REDES.forEach(function (definicion) {
+      formulario.appendChild(control(definicion.etiqueta,
+        entrada('red_' + definicion.campo, definicion.ejemplo)));
+    });
+  }
+
+  function valorCampo(nombre) {
+    var nodo = $('[name="' + nombre + '"]', $('#formulario-precandidato'));
+    return nodo ? String(nodo.value || '').trim() : '';
+  }
+
+  function registraPrecandidato() {
+    var aviso = $('#aviso-precandidato');
+    var nombre = valorCampo('nombre');
+    var territorio = valorCampo('territorio');
+    if (territorio === '__manual__') territorio = valorCampo('territorio_manual');
+
+    if (!nombre) {
+      aviso.textContent = 'Falta el nombre de la persona aspirante.';
+      aviso.className = 'aviso aviso-error';
+      return;
+    }
+    if (!territorio) {
+      aviso.textContent = 'Indica el municipio o distrito que va a competir.';
+      aviso.className = 'aviso aviso-error';
+      return;
+    }
+
+    var redes = {};
+    var conCuenta = false;
+    CAMPOS_REDES.forEach(function (definicion) {
+      var valor = valorCampo('red_' + definicion.campo);
+      if (!valor) return;
+      redes[definicion.campo] = definicion.campo === 'facebook' ||
+        definicion.campo === 'ad_library_id' ? valor : normalizaHandle(valor);
+      conCuenta = true;
+    });
+
+    var registro = {
+      id: 'pc_' + Date.now().toString(36),
+      nombre: nombre,
+      cargo: valorCampo('cargo') || CARGOS[0],
+      entidad: valorCampo('entidad') || 'Jalisco',
+      territorio: territorio,
+      partido: valorCampo('partido'),
+      redes: redes,
+      alta: new Date().toISOString().slice(0, 10)
+    };
+
+    var persistido = guardaPrecandidatos(estado.precandidatos.concat([registro]));
+
+    aviso.className = 'aviso aviso-ok';
+    aviso.textContent = nombre + ' quedó en monitoreo para ' + territorio + '.';
+    if (!conCuenta) {
+      aviso.textContent += ' Sin cuentas capturadas, el tracker no podrá auditarlo.';
+      aviso.className = 'aviso aviso-atencion';
+    }
+    if (!persistido) {
+      aviso.textContent += ' El navegador no permitió guardarlo, así que el registro se pierde al recargar.';
+      aviso.className = 'aviso aviso-atencion';
+    }
+
+    construyeFormulario();
+    pintaPrecandidatosRegistrados();
+    pintaBenchmark();
+    pintaAuditoriaPauta();
+  }
+
+  function exportaConfiguracionMonitoreo() {
+    var configuracion = {
+      generado_en: new Date().toISOString(),
+      version: 1,
+      origen: 'CRM de precandidatos · Consensus Estrategia',
+      precandidatos: estado.precandidatos.map(function (p) {
+        return {
+          id: p.id,
+          nombre: p.nombre,
+          cargo: p.cargo,
+          entidad: p.entidad,
+          territorio: p.territorio,
+          partido: p.partido,
+          eleccion_id: (estado.elecciones.filter(function (e) {
+            return nombreTerritorio(e) === p.territorio && e.cargo === p.cargo;
+          })[0] || {}).eleccion_id || null,
+          cuentas: {
+            facebook_page: (p.redes || {}).facebook || null,
+            instagram: (p.redes || {}).instagram || null,
+            x: (p.redes || {}).x || null,
+            tiktok: (p.redes || {}).tiktok || null,
+            meta_ad_library_page_id: (p.redes || {}).ad_library_id || null
+          }
+        };
+      })
+    };
+
+    var blob = new Blob([JSON.stringify(configuracion, null, 2)],
+      { type: 'application/json;charset=utf-8;' });
+    var enlace = document.createElement('a');
+    enlace.href = URL.createObjectURL(blob);
+    enlace.download = 'monitoreo_precandidatos.json';
+    document.body.appendChild(enlace);
+    enlace.click();
+    document.body.removeChild(enlace);
+    URL.revokeObjectURL(enlace.href);
+
+    var aviso = $('#aviso-precandidato');
+    aviso.className = 'aviso aviso-ok';
+    aviso.textContent = 'Configuración exportada. Córrela con: python3 tracker_precandidatos.py ' +
+      '--config monitoreo_precandidatos.json';
+  }
+
+  function abreModal() {
+    var modal = $('#modal-precandidatos');
+    modal.hidden = false;
+    document.body.classList.add('con-modal');
+    construyeFormulario();
+    pintaPrecandidatosRegistrados();
+    $('#aviso-precandidato').textContent = '';
+    $('#aviso-precandidato').className = 'aviso';
+    var primero = $('[name="nombre"]', modal);
+    if (primero) primero.focus();
+  }
+
+  function cierraModal() {
+    $('#modal-precandidatos').hidden = true;
+    document.body.classList.remove('con-modal');
+    $('#boton-precandidatos').focus();
+  }
+
+  /* Los registros sin métricas se muestran como filas en monitoreo: aparecen
+     en el radar del territorio, pero con guiones en lugar de cifras hasta que
+     el tracker traiga datos reales de las APIs. */
+  function filasEnMonitoreo() {
+    return precandidatosDe(estado.eleccion).map(function (p) {
+      return {
+        nombre: p.nombre,
+        coalicion: p.partido || 'Sin partido declarado',
+        es_propio: false,
+        en_monitoreo: true,
+        seguidores: null,
+        crecimiento_7d: null,
+        publicaciones_7d: null,
+        engagement_rate: null,
+        share_of_voice_pct: null,
+        gasto_ads_30d_mxn: null,
+        cpm_mxn: null,
+        anuncios_activos: null,
+        temas_pauta: [],
+        formatos: [],
+        mejor_formato: null
+      };
+    });
+  }
+
   function colorSentimiento(nfs) {
     if (nfs >= 10) return COLORES.ganada;
     if (nfs >= -10) return COLORES.swing;
@@ -1456,17 +1861,79 @@
      Pie y contexto
      ----------------------------------------------------------------- */
 
+  var NOMBRES_CAMPO = {
+    lista_nominal: 'Lista nominal',
+    secciones: 'Secciones',
+    resultados_electorales: 'Resultados electorales',
+    tope_gastos_campana: 'Tope de gastos',
+    redes_sociales: 'Redes sociales'
+  };
+
+  /* El pie no repite una leyenda fija: lee la procedencia que el propio
+     paquete declara campo por campo. Cuando los cómputos oficiales entran,
+     la línea cambia sola. */
+  function pintaProcedencia() {
+    var procedencia = (estado.meta && estado.meta.procedencia) || {};
+    var contenedor = vacia($('#pie-fuentes'));
+    var campos = Object.keys(NOMBRES_CAMPO);
+
+    if (!campos.some(function (c) { return procedencia[c]; })) {
+      contenedor.appendChild(crear('span', 'fuente-linea',
+        'Fuente: ' + (estado.meta.fuente_primaria || 'no declarada')));
+      return;
+    }
+
+    if (procedencia.completo) {
+      contenedor.appendChild(crear('span', 'fuente-linea',
+        'Fuente: Cómputos oficiales IEPC Jalisco / INE · Meta Ad Library API y Graph API'));
+      return;
+    }
+
+    campos.forEach(function (campo) {
+      var bloque = procedencia[campo];
+      if (!bloque) return;
+      var etiqueta = crear('span', 'fuente-dato fuente-' + bloque.estado);
+      etiqueta.appendChild(crear('b', '', NOMBRES_CAMPO[campo]));
+      etiqueta.appendChild(document.createTextNode(' ' + bloque.estado));
+      if (bloque.fuente) etiqueta.title = bloque.fuente;
+      contenedor.appendChild(etiqueta);
+    });
+  }
+
   function pintaContexto() {
     var e = estado.eleccion;
-    var redes = e.redes || {};
     $('#contexto-eleccion').textContent =
       e.cargo + ' · ' + nombreTerritorio(e) + ' · ' + nombreCoalicion(e);
     $('#contexto-corte').textContent = 'Corte al ' + fechaLarga(estado.fechaCorte);
     $('#pie-version').textContent =
       'Esquema ' + (estado.meta.version_esquema || 'n/d') +
-      ' · generado el ' + fechaLarga((estado.meta.generado_en || '').slice(0, 10)) +
-      ' · fuente ' + (estado.meta.fuente_primaria || 'no declarada') +
-      (redes.origen_serie === 'mock' ? ' · métricas de redes en modo demostración' : '');
+      ' · generado el ' + fechaLarga((estado.meta.generado_en || '').slice(0, 10));
+    pintaProcedencia();
+  }
+
+  /* Aviso visible cuando el tablero corre con la muestra embebida, para que
+     nadie confunda una vista parcial con el universo completo. */
+  function pintaAvisoRespaldo() {
+    var caja = $('#aviso-respaldo');
+    var muestra = estado.eleccion.muestra;
+
+    if (!estado.usandoRespaldo && !muestra) {
+      caja.hidden = true;
+      return;
+    }
+
+    caja.hidden = false;
+    vacia(caja);
+    var texto = estado.motivoRespaldo ||
+      'El tablero trabaja con una muestra seccional embebida.';
+    if (muestra) {
+      texto += ' Se listan ' + entero(muestra.secciones_incluidas) + ' de ' +
+        entero(muestra.secciones_totales) + ' secciones; los indicadores ' +
+        'agregados sí corresponden al universo completo.';
+    }
+    caja.appendChild(crear('p', '', texto));
+    caja.appendChild(crear('p', 'aviso-pie',
+      'Para ver el detalle completo, sirve la carpeta por HTTP: python3 -m http.server 8080'));
   }
 
   /* -----------------------------------------------------------------
@@ -1476,6 +1943,7 @@
   function pintaTodo() {
     pintaSelectores();
     pintaContexto();
+    pintaAvisoRespaldo();
     pintaHero();
     pintaKpis();
     pintaFiltros();
@@ -1551,6 +2019,17 @@
 
     $('#boton-exportar').addEventListener('click', exportaCsv);
     $('#boton-reporte').addEventListener('click', imprimeReporte);
+    $('#boton-precandidatos').addEventListener('click', abreModal);
+    $('#cerrar-modal').addEventListener('click', cierraModal);
+    $('#boton-registrar').addEventListener('click', registraPrecandidato);
+    $('#boton-exportar-monitoreo').addEventListener('click', exportaConfiguracionMonitoreo);
+
+    $('#modal-precandidatos').addEventListener('click', function (ev) {
+      if (ev.target === ev.currentTarget) cierraModal();
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && !$('#modal-precandidatos').hidden) cierraModal();
+    });
   }
 
   /* -----------------------------------------------------------------
@@ -1630,7 +2109,9 @@
     ayuda.appendChild(document.createTextNode('Genera el paquete con '));
     ayuda.appendChild(crear('code', '', 'python3 etl_electoral_sync.py --demo'));
     ayuda.appendChild(document.createTextNode(
-      ' y sirve la carpeta por HTTP; abrir el archivo con doble clic bloquea la lectura del JSON.'));
+      ' y sirve la carpeta por HTTP. Para abrir el tablero con doble clic, genera además el respaldo embebido con '));
+    ayuda.appendChild(crear('code', '', '--respaldo'));
+    ayuda.appendChild(document.createTextNode(' y déjalo junto al index.'));
     caja.appendChild(ayuda);
   }
 
@@ -1651,6 +2132,7 @@
         $('#estado-carga').hidden = true;
         $('#tablero').hidden = false;
 
+        estado.precandidatos = leePrecandidatos();
         conectaControles();
         seleccionaEleccion(
           opciones.eleccionInicial || paquete.elecciones[0].eleccion_id

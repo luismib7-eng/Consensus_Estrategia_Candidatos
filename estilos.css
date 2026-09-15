@@ -768,3 +768,141 @@ td.temas { white-space: normal; text-align: left; }
 
   .pie { border-top: 1px solid var(--linea-suave); }
 }
+
+
+/* ---------- Avisos ---------- */
+
+.aviso {
+  border-radius: var(--radio-chico);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding: 0;
+  color: var(--texto-medio);
+}
+
+.aviso:empty { display: none; }
+
+.aviso-ok,
+.aviso-error,
+.aviso-atencion {
+  padding: 11px 14px;
+  border: 1px solid var(--linea);
+  border-left-width: 3px;
+  background: var(--pizarra-alta);
+}
+
+.aviso-ok { border-left-color: var(--ganada); }
+.aviso-atencion { border-left-color: var(--swing); }
+.aviso-error { border-left-color: var(--riesgo); color: var(--texto); }
+
+.aviso-pie { font-size: 12px; color: var(--texto-tenue); margin-top: 6px; }
+
+/* ---------- Procedencia en el pie ---------- */
+
+.fuente-dato {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--linea);
+  font-size: 11.5px;
+  cursor: help;
+}
+
+.fuente-dato b { font-weight: 600; color: var(--texto-medio); }
+
+.fuente-oficial { color: var(--ganada); border-color: rgba(63, 185, 132, 0.4); }
+.fuente-estimado { color: var(--swing); border-color: rgba(232, 151, 58, 0.4); }
+.fuente-modelado { color: var(--texto-tenue); }
+
+.fuente-linea { font-size: 12px; color: var(--texto-medio); }
+
+/* ---------- Modal del CRM ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(4, 8, 16, 0.78);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+body.con-modal { overflow: hidden; }
+
+.modal-caja {
+  width: min(880px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--pizarra);
+  border: 1px solid var(--linea);
+  border-radius: var(--radio);
+}
+
+.modal-cabeza {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--linea-suave);
+}
+
+.modal-cuerpo {
+  padding: 18px 22px 22px;
+  overflow-y: auto;
+  display: grid;
+  gap: 24px;
+}
+
+.boton-principal {
+  background: var(--oro);
+  border-color: var(--oro);
+  color: #1a1305;
+  font-weight: 600;
+}
+
+.boton-principal:hover { background: #e6b747; }
+
+.boton-sutil {
+  background: transparent;
+  color: var(--texto-medio);
+  font-size: 12.5px;
+  padding: 5px 11px;
+}
+
+/* ---------- Fichas de precandidatura ---------- */
+
+.ficha-precandidato {
+  border: 1px solid var(--linea-suave);
+  border-radius: var(--radio-chico);
+  padding: 12px 14px;
+  background: var(--pizarra-alta);
+  display: grid;
+  gap: 8px;
+}
+
+.ficha-cabeza {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ficha-nombre { font-size: 14px; color: var(--texto); font-weight: 600; }
+.ficha-meta { font-size: 11.5px; color: var(--texto-tenue); }
+.ficha-cuentas { display: flex; flex-wrap: wrap; gap: 4px; }
+
+table.comparativa tbody tr.actor-monitoreo td { color: var(--texto-tenue); }
+table.comparativa tbody tr.actor-monitoreo td:first-child {
+  border-left: 2px dashed var(--linea);
+}
+
+@media print {
+  .modal { display: none !important; }
+}

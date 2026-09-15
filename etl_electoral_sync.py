@@ -1113,6 +1113,7 @@ def construye_eleccion(
         "candidato": candidato,
         "parametros": asdict(parametros),
         "indicadores": indicadores,
+        "procedencia": identidad.get("procedencia", {}),
         "fiscalizacion": fiscalizacion,
         "secciones": list(secciones),
         "redes": {
@@ -1133,8 +1134,37 @@ def construye_eleccion(
 UMBRAL_SANGRIA_BYTES = 1_200_000
 
 
+def resume_procedencia(elecciones: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Consolida la procedencia de todas las elecciones del paquete.
+
+    Si un campo es oficial en todas, se declara oficial; basta con que una
+    eleccion lo traiga modelado para que el paquete entero lo declare asi.
+    """
+    campos = ("lista_nominal", "secciones", "resultados_electorales",
+              "tope_gastos_campana", "redes_sociales")
+    jerarquia = {"oficial": 0, "estimado": 1, "modelado": 2}
+    resumen: Dict[str, Any] = {}
+
+    for campo in campos:
+        peor = None
+        fuente = None
+        for eleccion in elecciones:
+            bloque = (eleccion.get("procedencia") or {}).get(campo) or {}
+            estado = bloque.get("estado", "modelado")
+            if peor is None or jerarquia.get(estado, 3) > jerarquia.get(peor, 3):
+                peor = estado
+                fuente = bloque.get("fuente")
+        resumen[campo] = {"estado": peor or "modelado", "fuente": fuente}
+
+    resumen["completo"] = all(
+        resumen[c]["estado"] == "oficial" for c in campos
+    )
+    return resumen
+
+
 def _bloque_meta(fuente_primaria: str, elecciones: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     return {
+        "procedencia": resume_procedencia(elecciones),
         "version_esquema": VERSION_ESQUEMA,
         "generado_en": ahora_iso(),
         "generador": "etl_electoral_sync.py",
@@ -1160,6 +1190,73 @@ def escribe_json_maestro(elecciones: Sequence[Dict[str, Any]], ruta: str,
         "meta": _bloque_meta(fuente_primaria, elecciones),
         "elecciones": list(elecciones),
     }, ruta)
+
+
+def construye_respaldo(elecciones: Sequence[Dict[str, Any]],
+                       secciones_por_eleccion: int = 40) -> List[Dict[str, Any]]:
+    """Version reducida del paquete para el respaldo embebido del navegador.
+
+    Conserva intactos los indicadores agregados, la fiscalizacion y la suite
+    digital —que es lo que se lee en pantalla— y recorta el detalle seccional
+    a una muestra estratificada por clasificacion, para que el mosaico y la
+    tabla sigan mostrando las tres categorias sin arrastrar dos megabytes.
+    """
+    reducidas: List[Dict[str, Any]] = []
+
+    for eleccion in elecciones:
+        copia = dict(eleccion)
+        secciones = eleccion.get("secciones", [])
+
+        # Muestra proporcional: cada clasificacion aporta segun su peso real.
+        por_clase: Dict[str, List[Dict[str, Any]]] = {}
+        for seccion in secciones:
+            por_clase.setdefault(seccion["clasificacion"], []).append(seccion)
+
+        muestra: List[Dict[str, Any]] = []
+        for clase, grupo in por_clase.items():
+            cuota = max(1, round(len(grupo) / max(len(secciones), 1)
+                                 * secciones_por_eleccion))
+            ordenado = sorted(grupo, key=lambda s: s["target_movilizacion"],
+                              reverse=True)
+            muestra.extend(ordenado[:cuota])
+
+        muestra.sort(key=lambda s: s["seccion"])
+        copia["secciones"] = muestra
+        copia["muestra"] = {
+            "es_muestra": True,
+            "secciones_incluidas": len(muestra),
+            "secciones_totales": len(secciones),
+            "criterio": ("Muestra proporcional por clasificacion, ordenada por "
+                         "target de movilizacion. Los indicadores agregados "
+                         "corresponden al universo completo."),
+        }
+        reducidas.append(copia)
+
+    return reducidas
+
+
+def escribe_respaldo_js(elecciones: Sequence[Dict[str, Any]], ruta: str,
+                        fuente_primaria: str = "INE / IEPC Jalisco") -> str:
+    """Escribe `data_fallback.js`, que el tablero carga cuando el navegador
+    bloquea la lectura del JSON (por ejemplo al abrir el archivo con doble
+    clic, bajo el protocolo file://)."""
+    paquete = {
+        "meta": dict(_bloque_meta(fuente_primaria, elecciones),
+                     **{"es_respaldo": True}),
+        "elecciones": construye_respaldo(elecciones),
+    }
+    contenido = (
+        "/* Respaldo embebido del tablero de Consensus Estrategia.\n"
+        "   Generado por etl_electoral_sync.py --respaldo. No editar a mano.\n"
+        "   Contiene una muestra seccional; el paquete completo vive en\n"
+        "   electoral_master_data.json y requiere servirse por HTTP. */\n"
+        "window.DATA_FALLBACK = "
+        + json.dumps(paquete, ensure_ascii=False, separators=(",", ":"))
+        + ";\n"
+    )
+    with open(ruta, "w", encoding="utf-8") as fh:
+        fh.write(contenido)
+    return ruta
 
 
 def escribe_por_eleccion(elecciones: Sequence[Dict[str, Any]], carpeta: str,
@@ -1348,6 +1445,37 @@ def procesa_configuracion(ruta_config: str, con_red: bool = False) -> List[Dict[
                 redes["kpis"].setdefault("cpm_mxn", propio["cpm_mxn"])
 
 
+        # La procedencia declarada por la configuracion manda; si no viene,
+        # se deduce de lo que realmente se cargo en esta corrida.
+        entrada.setdefault("procedencia", {
+            "lista_nominal": {
+                "estado": "oficial" if secciones else "sin dato",
+                "fuente": entrada.get("fuente_lista_nominal",
+                                      "Computos cargados con --config"),
+            },
+            "secciones": {
+                "estado": "oficial" if secciones else "sin dato",
+                "fuente": "Conteo real de secciones en los computos cargados",
+            },
+            "resultados_electorales": {
+                "estado": "oficial" if fuentes else "sin dato",
+                "fuente": entrada.get(
+                    "fuente_computos",
+                    "Computos cargados desde " + ", ".join(
+                        str(f.ruta) for f in fuentes) if fuentes else "Sin computos"),
+            },
+            "tope_gastos_campana": {
+                "estado": "oficial" if (entrada.get("candidato") or {}).get(
+                    "tope_gastos_campana_mxn") else "sin dato",
+                "fuente": entrada.get("fuente_tope", "Declarado en la configuracion"),
+            },
+            "redes_sociales": {
+                "estado": "oficial" if con_red and redes.get("origen_serie") != "mock"
+                          else "modelado",
+                "fuente": ("Meta Ad Library API y Graph API" if con_red
+                           else "Pendiente de conectar las APIs de Meta"),
+            },
+        })
         resultado.append(construye_eleccion(entrada, secciones, redes, parametros))
 
     return resultado
@@ -1362,6 +1490,16 @@ def procesa_configuracion(ruta_config: str, con_red: bool = False) -> List[Dict[
 #: acuerdo del Consejo General y debe sustituirse en la configuracion del
 #: cliente (`candidato.tope_gastos_campana_mxn`).
 FACTOR_TOPE_PROXY_MXN_POR_ELECTOR = 8.50
+
+#: Promedio de electores por seccion en la Zona Metropolitana de Guadalajara,
+#: usado solo para estimar cuantas secciones tiene cada municipio cuando aun
+#: no se han cargado los computos. Al correr el pipeline con `--config`, el
+#: numero de secciones sale de los propios computos y esta constante deja de
+#: intervenir.
+ELECTORES_POR_SECCION_AMG = 1_350
+
+#: Corte de la Lista Nominal usado en el catalogo territorial.
+FUENTE_LISTA_NOMINAL = "DERFE-INE, Lista Nominal al 29 de enero de 2026"
 
 
 @dataclass
@@ -1385,11 +1523,19 @@ class PerfilMunicipal:
     rivales: Tuple[Tuple[str, str], ...]
     temas: Tuple[str, ...]
     nota: str
+    #: Procedencia de `lista_nominal`. El resto de los campos del perfil son
+    #: parametros de modelado, no cifras oficiales.
+    fuente_lista_nominal: str = FUENTE_LISTA_NOMINAL
+
+    @property
+    def secciones_estimadas(self) -> int:
+        """Secciones estimadas a partir de la lista nominal oficial."""
+        return max(1, round(self.lista_nominal / ELECTORES_POR_SECCION_AMG))
 
 
 CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
     PerfilMunicipal(
-        clave="GDL", municipio="Guadalajara", lista_nominal=1_080_000, secciones=920,
+        clave="GDL", municipio="Guadalajara", lista_nominal=1_228_660, secciones=910,
         fuerza_propia_pct=34.5, competitividad=9.5, participacion_media_pct=52.0,
         audiencia_inicial=146_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1399,7 +1545,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Capital estatal, competencia cerrada entre Morena y MC",
     ),
     PerfilMunicipal(
-        clave="ZAP", municipio="Zapopan", lista_nominal=1_150_000, secciones=890,
+        clave="ZAP", municipio="Zapopan", lista_nominal=1_143_381, secciones=847,
         fuerza_propia_pct=38.0, competitividad=7.5, participacion_media_pct=53.5,
         audiencia_inicial=132_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1409,7 +1555,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Bastión metropolitano con mayor lista nominal del estado",
     ),
     PerfilMunicipal(
-        clave="TLQ", municipio="San Pedro Tlaquepaque", lista_nominal=510_000, secciones=410,
+        clave="TLQ", municipio="San Pedro Tlaquepaque", lista_nominal=517_918, secciones=384,
         fuerza_propia_pct=33.0, competitividad=10.5, participacion_media_pct=48.5,
         audiencia_inicial=61_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1419,7 +1565,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Zona altamente disputada en el corredor sur del AMG",
     ),
     PerfilMunicipal(
-        clave="TLJ", municipio="Tlajomulco de Zúñiga", lista_nominal=490_000, secciones=360,
+        clave="TLJ", municipio="Tlajomulco de Zúñiga", lista_nominal=471_548, secciones=349,
         fuerza_propia_pct=31.5, competitividad=8.5, participacion_media_pct=47.0,
         audiencia_inicial=54_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1429,7 +1575,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Crecimiento habitacional acelerado y presión por servicios",
     ),
     PerfilMunicipal(
-        clave="TON", municipio="Tonalá", lista_nominal=395_000, secciones=290,
+        clave="TON", municipio="Tonalá", lista_nominal=395_879, secciones=293,
         fuerza_propia_pct=32.0, competitividad=9.0, participacion_media_pct=46.5,
         audiencia_inicial=48_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1439,7 +1585,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Plaza con alta volatilidad seccional",
     ),
     PerfilMunicipal(
-        clave="SAL", municipio="El Salto", lista_nominal=160_000, secciones=115,
+        clave="SAL", municipio="El Salto", lista_nominal=149_884, secciones=111,
         fuerza_propia_pct=30.0, competitividad=11.0, participacion_media_pct=45.0,
         audiencia_inicial=21_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1449,7 +1595,7 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Corredor industrial con agenda ambiental dominante",
     ),
     PerfilMunicipal(
-        clave="PVR", municipio="Puerto Vallarta", lista_nominal=240_000, secciones=180,
+        clave="PVR", municipio="Puerto Vallarta", lista_nominal=247_852, secciones=184,
         fuerza_propia_pct=35.5, competitividad=8.0, participacion_media_pct=49.0,
         audiencia_inicial=39_000, coalicion="Coalición opositora",
         partidos=("PAN", "PRI", "PRD"),
@@ -1459,6 +1605,50 @@ CATALOGO_JALISCO: Tuple[PerfilMunicipal, ...] = (
         nota="Plaza turística con electorado flotante",
     ),
 )
+
+
+def procedencia_territorio(perfil: PerfilMunicipal) -> Dict[str, Any]:
+    """Declara, campo por campo, de donde sale cada cifra del paquete.
+
+    Es lo que permite que el pie del tablero diga la verdad sin que nadie
+    tenga que acordarse: en cuanto se cargan los computos reales con
+    `--config`, la procedencia deja de decir "modelado" para ese campo.
+    """
+    return {
+        "lista_nominal": {
+            "estado": "oficial",
+            "fuente": perfil.fuente_lista_nominal,
+        },
+        "secciones": {
+            "estado": "estimado",
+            "fuente": (
+                f"Estimacion: lista nominal entre {ELECTORES_POR_SECCION_AMG:,} "
+                f"electores por seccion. Se sustituye por el conteo real al "
+                f"cargar los computos del IEPC."
+            ).replace(",", ","),
+        },
+        "resultados_electorales": {
+            "estado": "modelado",
+            "fuente": (
+                "Pendiente de cargar computos oficiales del IEPC Jalisco "
+                "(2018, 2021 y 2024) con --config."
+            ),
+        },
+        "tope_gastos_campana": {
+            "estado": "estimado",
+            "fuente": (
+                f"Proxy de {FACTOR_TOPE_PROXY_MXN_POR_ELECTOR} MXN por elector. "
+                f"Sustituir por el acuerdo de topes del Consejo General del IEPC."
+            ),
+        },
+        "redes_sociales": {
+            "estado": "modelado",
+            "fuente": (
+                "Pendiente de conectar Meta Ad Library API y Graph API con "
+                "las cuentas registradas en el CRM de precandidatos."
+            ),
+        },
+    }
 
 
 def _genera_secciones_sinteticas(perfil: PerfilMunicipal,
@@ -1786,16 +1976,7 @@ def genera_demo(semilla: int = 20270606,
                 "partidos": list(perfil.partidos),
                 "tope_gastos_campana_mxn": tope,
             },
-            "calibracion": {
-                "origen": "estimacion",
-                "advertencia": (
-                    "Lista nominal, número de secciones y tope de gastos son "
-                    "valores de calibración para demostración. Sustituir por el "
-                    "corte oficial del padrón del INE, la seccionalización "
-                    "vigente y el acuerdo de topes del IEPC Jalisco."
-                ),
-                "factor_tope_proxy": FACTOR_TOPE_PROXY_MXN_POR_ELECTOR,
-            },
+            "procedencia": procedencia_territorio(perfil),
             "fiscalizacion": construye_fiscalizacion(tope, devengado, gasto_30d),
         }
 
@@ -1888,11 +2069,7 @@ def _genera_distrito_demo(semilla: int) -> Dict[str, Any]:
             "nombre": "Candidatura Consensus", "coalicion": perfil.coalicion,
             "partidos": list(perfil.partidos), "tope_gastos_campana_mxn": tope,
         },
-        "calibracion": {
-            "origen": "estimacion",
-            "advertencia": "Valores de calibración para demostración.",
-            "factor_tope_proxy": FACTOR_TOPE_PROXY_MXN_POR_ELECTOR,
-        },
+        "procedencia": procedencia_territorio(perfil),
         "fiscalizacion": construye_fiscalizacion(tope, devengado, gasto_30d),
     }
 
@@ -1947,6 +2124,10 @@ def construye_parser() -> argparse.ArgumentParser:
                         help="Archivo JSON maestro de salida.")
     parser.add_argument("--semilla", type=int, default=20270606,
                         help="Semilla del generador de demostracion.")
+    parser.add_argument("--respaldo", metavar="ARCHIVO", nargs="?",
+                        const="data_fallback.js",
+                        help="Escribe el respaldo embebido (data_fallback.js) que el "
+                             "tablero usa cuando el navegador bloquea la lectura del JSON.")
     parser.add_argument("--por-eleccion", metavar="CARPETA",
                         help="Ademas del maestro, escribe un archivo por eleccion "
                              "y un indice ligero en esa carpeta.")
@@ -1962,13 +2143,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.demo:
         elecciones = genera_demo(semilla=args.semilla)
-        fuente = "Datos sintéticos de demostración"
+        fuente = "Lista Nominal DERFE-INE; resultados y redes en modelado"
     else:
         elecciones = procesa_configuracion(args.config, con_red=args.con_red)
         fuente = "INE / IEPC Jalisco"
 
     ruta = escribe_json_maestro(elecciones, args.salida, fuente_primaria=fuente)
     peso = os.path.getsize(ruta) / 1024.0
+
+    if args.respaldo:
+        ruta_respaldo = escribe_respaldo_js(elecciones, args.respaldo,
+                                            fuente_primaria=fuente)
+        peso_respaldo = os.path.getsize(ruta_respaldo) / 1024.0
+        print(f"Respaldo embebido escrito en: {ruta_respaldo} ({peso_respaldo:,.0f} KB)")
 
     if args.por_eleccion:
         rutas = escribe_por_eleccion(elecciones, args.por_eleccion, fuente_primaria=fuente)

@@ -11,7 +11,9 @@ alcaldía, un distrito local, uno federal o una senaduría.
 | --- | --- |
 | `etl_electoral_sync.py` | Ingesta de cómputos INE/IEPC, cálculo de indicadores por sección, conectores de Meta y generación del JSON maestro. Sin dependencias externas. |
 | `electoral_master_data.json` | Paquete de datos que consume el tablero. Incluido ya generado con los 7 municipios. |
+| `data_fallback.js` | Respaldo embebido: permite abrir el tablero con doble clic, sin servidor. |
 | `datos/` | Un archivo por elección más `indice.json`, para cargar solo el territorio abierto. |
+| `tracker_precandidatos.py` | Auditoría digital contra Meta Ad Library, Page Insights e Instagram. |
 | `configuracion_ejemplo.json` | Plantilla de configuración por cliente (multi-inquilino). |
 | `index.html` | Documento del dashboard ejecutivo. |
 | `tablero_core.js` | Lógica de render, filtros, cartografía y gráficas. Desacoplada del origen de datos. |
@@ -20,13 +22,20 @@ alcaldía, un distrito local, uno federal o una senaduría.
 ## Puesta en marcha
 
 ```bash
-# 1. Paquete de demostración: 7 municipios de Jalisco más un distrito local
-python3 etl_electoral_sync.py --demo --salida electoral_master_data.json --por-eleccion datos
+# 1. Paquete base: 7 municipios de Jalisco más un distrito local
+python3 etl_electoral_sync.py --demo --salida electoral_master_data.json \
+    --respaldo data_fallback.js --por-eleccion datos
 
-# 2. Servir por HTTP — abrir index.html con doble clic bloquea la lectura del JSON
+# 2. Servir por HTTP (recomendado: da acceso al detalle seccional completo)
 python3 -m http.server 8080
 # http://localhost:8080
 ```
+
+Con `data_fallback.js` presente, el tablero también abre con doble clic. Bajo
+el protocolo `file://` el navegador bloquea la lectura del JSON por política de
+origen, así que el tablero ni lo intenta: pasa directo al respaldo, que trae
+los indicadores agregados completos y una muestra de 40 secciones por
+territorio. Un aviso en pantalla dice que la vista es parcial.
 
 ## Procesamiento con datos reales
 
@@ -44,19 +53,39 @@ Si falta token o falla la API, el pipeline no se detiene: registra el error en
 `stderr` y completa la serie de redes con el generador de estructura idéntica,
 marcando `redes.origen_serie = "mock"`. El pie del tablero lo declara en pantalla.
 
-## Cobertura territorial del paquete de demostración
+## Procedencia de los datos
+
+El paquete declara, campo por campo, de dónde sale cada cifra, y el pie del
+tablero lee esa declaración en lugar de repetir una leyenda fija:
+
+| Campo | Estado actual | Fuente |
+| --- | --- | --- |
+| Lista nominal | oficial | DERFE-INE, corte al 29 de enero de 2026 |
+| Secciones | estimado | Lista nominal entre 1,350 electores por sección |
+| Resultados electorales | modelado | Pendiente de cargar cómputos del IEPC |
+| Tope de gastos | estimado | Proxy de 8.50 MXN por elector |
+| Redes sociales | modelado | Pendiente de conectar las APIs de Meta |
+
+En cuanto se corre el pipeline con `--config` y archivos de cómputos reales,
+los campos correspondientes pasan a `oficial` y el pie cambia solo. Cuando los
+cinco son oficiales, la línea se convierte en «Fuente: Cómputos oficiales IEPC
+Jalisco / INE · Meta Ad Library API y Graph API».
+
+Mientras alguno siga en `modelado`, el tablero no debe presentarse como
+inteligencia electoral verificada. Los indicadores se calculan con la misma
+maquinaria en ambos casos; lo que cambia es el insumo.
+
+## Cobertura territorial
 
 Guadalajara, Zapopan, San Pedro Tlaquepaque, Tlajomulco de Zúñiga, Tonalá,
 El Salto y Puerto Vallarta, con la seccionalización completa de cada uno
 (3,293 secciones en total), más el distrito local 8 para verificar que el
 selector de cargo cambia el universo territorial sin tocar la vista.
 
-La lista nominal, el número de secciones y el tope de gastos son **valores de
-calibración**, no cifras oficiales: cada elección los declara en su bloque
-`calibracion`, y el tope se estima con
-`FACTOR_TOPE_PROXY_MXN_POR_ELECTOR`. Antes de usar la plataforma con un
-cliente hay que sustituirlos por el corte del padrón del INE, la
-seccionalización vigente y el acuerdo de topes del IEPC Jalisco.
+La lista nominal de cada municipio es la oficial del INE. El número de
+secciones es una estimación derivada de ella y el tope de gastos usa un factor
+proxy; ambos se sustituyen al cargar los cómputos del IEPC y el acuerdo de
+topes del Consejo General.
 
 El maestro completo pesa unos 2.4 MB. Para producción conviene `--por-eleccion`:
 el índice pesa unos kilobytes y el detalle seccional se baja solo del
@@ -103,6 +132,49 @@ territorio que el usuario abre.
   histórico más el margen de seguridad.
 - **Clasificación.** `swing` si el margen es estrecho o la volatilidad supera el
   umbral; si no, `ganada` o `riesgo` según el signo del último margen.
+
+## CRM de precandidaturas
+
+El botón «Precandidatos» del encabezado abre el registro de aspirantes a
+auditar: nombre, cargo, entidad, municipio o distrito —los siete del catálogo
+o captura manual para el resto del país—, partido o coalición, y las cuentas
+oficiales (Facebook Page ID o URL, Instagram, X, TikTok e ID de Meta Ad
+Library).
+
+Los registros se guardan en `localStorage` del navegador y aparecen de
+inmediato en el radar competitivo y en la auditoría de pauta de su territorio,
+con guiones en lugar de cifras: un aspirante recién dado de alta no tiene
+métricas, y poner ceros lo haría parecer un actor sin desempeño en vez de uno
+sin medir. Las filas en monitoreo tampoco entran a las gráficas.
+
+«Exportar configuración de monitoreo» descarga `monitoreo_precandidatos.json`,
+que es justamente lo que consume el tracker.
+
+## Auditoría digital
+
+```bash
+export META_ACCESS_TOKEN="EAAG..."                    # Ad Library
+export META_PAGE_TOKENS='{"1234567890":"EAAG..."}'    # Page Insights
+export IG_BUSINESS_ACCOUNT_ID="1784..."               # Business Discovery
+
+# Revisar credenciales y cuentas capturadas sin gastar llamadas
+python3 tracker_precandidatos.py --config monitoreo_precandidatos.json --diagnostico
+
+# Auditoría de 30 días
+python3 tracker_precandidatos.py --config monitoreo_precandidatos.json \
+    --salida auditoria_precandidatos.json --dias 30
+```
+
+El tracker nunca inventa un número. Si una fuente no responde, el campo queda
+en `null` y el motivo se detalla en `errores`, por precandidatura y por fuente.
+
+Sobre X y TikTok: ninguna ofrece acceso gratuito a métricas de terceros. X
+exige un plan de pago de su API v2 y TikTok aprueba la Research API caso por
+caso. El script declara ambos conectores y devuelve el motivo en lugar de
+estimar, porque raspar esas plataformas viola sus términos de servicio.
+
+La Ad Library publica rangos de gasto, no cifras exactas. El tracker conserva
+piso y techo, y reporta el punto medio como estimador declarado.
 
 ## Reporte ejecutivo
 

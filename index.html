@@ -39,6 +39,7 @@
       <p id="contexto-eleccion" class="text-sm" style="color: var(--texto-medio);">Cargando elección</p>
       <p id="contexto-corte" class="marca-linea">Corte pendiente</p>
     </div>
+    <button id="boton-precandidatos" type="button" class="boton no-imprimir">Precandidatos</button>
     <button id="boton-reporte" type="button" class="boton no-imprimir">Exportar reporte ejecutivo</button>
   </div>
 </header>
@@ -53,12 +54,15 @@
 <div class="contenedor">
   <div id="estado-carga" class="panel estado">
     <h2 class="panel-titulo">Preparando el tablero</h2>
-    <p>Leyendo <code>electoral_master_data.json</code>.</p>
+    <p>Leyendo <code>electoral_master_data.json</code>. Si el navegador bloquea la lectura,
+       el tablero pasa solo a la muestra embebida.</p>
   </div>
 </div>
 
 <!-- ============================== Tablero ================================= -->
 <main id="tablero" class="contenedor" hidden>
+
+  <div id="aviso-respaldo" class="aviso aviso-atencion mb-5" role="status" hidden></div>
 
   <!-- Selectores: un mismo tablero sirve a cualquier cargo y territorio -->
   <section class="panel p-5 grid gap-4 md:grid-cols-4" aria-label="Selección de elección">
@@ -249,12 +253,52 @@
 
 </main>
 
+<!-- CRM de precandidatos -->
+<div id="modal-precandidatos" class="modal no-imprimir" role="dialog" aria-modal="true"
+     aria-labelledby="titulo-modal" hidden>
+  <div class="modal-caja">
+    <header class="modal-cabeza">
+      <div>
+        <h2 class="panel-titulo" id="titulo-modal">Registrar y gestionar precandidaturas</h2>
+        <p class="panel-nota">Cada registro entra al radar de su territorio y a la configuración de monitoreo</p>
+      </div>
+      <button id="cerrar-modal" type="button" class="boton boton-sutil" aria-label="Cerrar">Cerrar</button>
+    </header>
+
+    <div class="modal-cuerpo">
+      <section aria-label="Alta de precandidatura">
+        <div id="formulario-precandidato" class="grid gap-3 sm:grid-cols-2"></div>
+        <p id="aviso-precandidato" class="aviso" role="status"></p>
+        <div class="flex flex-wrap gap-2 mt-3">
+          <button id="boton-registrar" type="button" class="boton boton-principal">Registrar precandidatura</button>
+          <button id="boton-exportar-monitoreo" type="button" class="boton">Exportar configuración de monitoreo</button>
+        </div>
+      </section>
+
+      <section aria-label="Precandidaturas registradas">
+        <div class="panel-cabeza px-0">
+          <h3 class="panel-titulo">En monitoreo</h3>
+          <p class="panel-nota" id="contador-precandidatos"></p>
+        </div>
+        <div id="lista-precandidatos" class="grid gap-2"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <footer class="contenedor pie flex flex-wrap items-center justify-between gap-3">
-  <p>Elaboración: Consensus Estrategia — Inteligencia de Datos y Análisis Electoral</p>
+  <div>
+    <p>Elaboración: Consensus Estrategia — Inteligencia de Datos y Análisis Electoral</p>
+    <div id="pie-fuentes" class="flex flex-wrap gap-2 mt-2"></div>
+  </div>
   <p id="pie-version"></p>
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<!-- Respaldo embebido: permite abrir el tablero con doble clic, cuando el
+     navegador bloquea la lectura del JSON. Generar con:
+     python3 etl_electoral_sync.py --demo --respaldo data_fallback.js -->
+<script src="data_fallback.js"></script>
 <script src="tablero_core.js"></script>
 <script>
   // Origen de datos intercambiable por cliente: basta con apuntar a otro
