@@ -1709,21 +1709,29 @@
 
     var persistido = guardaPrecandidatos(estado.precandidatos.concat([registro]));
 
-    aviso.className = 'aviso aviso-ok';
-    aviso.textContent = nombre + ' quedó en monitoreo para ' + territorio + '.';
+    var mensaje = nombre + ' quedó en monitoreo para ' + territorio + '.';
+    var tono = 'ok';
     if (!conCuenta) {
-      aviso.textContent += ' Sin cuentas capturadas, el tracker no podrá auditarlo.';
-      aviso.className = 'aviso aviso-atencion';
+      mensaje += ' Sin cuentas capturadas, el tracker no podrá auditarlo.';
+      tono = 'atencion';
     }
     if (!persistido) {
-      aviso.textContent += ' El navegador no permitió guardarlo, así que el registro se pierde al recargar.';
-      aviso.className = 'aviso aviso-atencion';
+      mensaje += ' El navegador no permitió guardarlo, así que el registro se pierde al recargar.';
+      tono = 'atencion';
     }
+
+    aviso.className = 'aviso aviso-' + tono;
+    aviso.textContent = mensaje;
 
     construyeFormulario();
     pintaPrecandidatosRegistrados();
     pintaBenchmark();
     pintaAuditoriaPauta();
+
+    // El alta devuelve al tablero: la confirmación se lee ahí, junto al radar
+    // donde ya aparece la nueva fila en monitoreo.
+    cierraModal();
+    avisaEnTablero(mensaje, tono);
   }
 
   function exportaConfiguracionMonitoreo() {
@@ -1771,7 +1779,9 @@
 
   function abreModal() {
     var modal = $('#modal-precandidatos');
+    if (!modal) return;
     modal.hidden = false;
+    modal.classList.remove('hidden');
     document.body.classList.add('con-modal');
     construyeFormulario();
     pintaPrecandidatosRegistrados();
@@ -1781,10 +1791,19 @@
     if (primero) primero.focus();
   }
 
+  /* Cierra por las tres vías: botón, fondo oscuro y Escape. Se apoya en el
+     atributo `hidden` y además en la clase, por si el tablero se integra en
+     una plantilla que use utilidades de Tailwind para ocultar. */
   function cierraModal() {
-    $('#modal-precandidatos').hidden = true;
+    var modal = $('#modal-precandidatos');
+    if (modal) {
+      modal.hidden = true;
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
     document.body.classList.remove('con-modal');
-    $('#boton-precandidatos').focus();
+    var disparador = $('#boton-precandidatos');
+    if (disparador) disparador.focus();
   }
 
   /* Los registros sin métricas se muestran como filas en monitoreo: aparecen
@@ -1913,6 +1932,15 @@
 
   /* Aviso visible cuando el tablero corre con la muestra embebida, para que
      nadie confunda una vista parcial con el universo completo. */
+  function avisaEnTablero(texto, tono) {
+    var caja = $('#aviso-tablero');
+    if (!caja) return;
+    vacia(caja);
+    caja.className = 'aviso aviso-' + (tono || 'ok') + ' mb-5';
+    caja.hidden = false;
+    caja.appendChild(crear('p', '', texto));
+  }
+
   function pintaAvisoRespaldo() {
     var caja = $('#aviso-respaldo');
     var muestra = estado.eleccion.muestra;
@@ -1983,21 +2011,35 @@
     cargaGeojsonSiHay();
   }
 
+  /* Si un nodo falta, el enlace se omite y los demás siguen conectándose: un
+     solo elemento ausente no puede dejar el tablero sin controles. */
+  function escucha(selector, evento, manejador) {
+    var nodo = $(selector);
+    if (!nodo) {
+      if (global.console && console.warn) {
+        console.warn('Tablero: no se encontró ' + selector + ', se omite el evento ' + evento + '.');
+      }
+      return false;
+    }
+    nodo.addEventListener(evento, manejador);
+    return true;
+  }
+
   function conectaControles() {
-    $('#selector-cargo').addEventListener('change', function (ev) {
+    escucha('#selector-cargo', 'change', function (ev) {
       var candidatas = eleccionesPorCargo(ev.target.value);
       if (candidatas.length) seleccionaEleccion(candidatas[0].eleccion_id);
     });
 
-    $('#selector-territorio').addEventListener('change', function (ev) {
+    escucha('#selector-territorio', 'change', function (ev) {
       seleccionaEleccion(ev.target.value);
     });
 
-    $('#selector-coalicion').addEventListener('change', function (ev) {
+    escucha('#selector-coalicion', 'change', function (ev) {
       seleccionaEleccion(String(ev.target.value).split('|')[0]);
     });
 
-    $('#campo-corte').addEventListener('change', function (ev) {
+    escucha('#campo-corte', 'change', function (ev) {
       estado.fechaCorte = ev.target.value;
       pintaContexto();
       pintaKpis();
@@ -2005,26 +2047,25 @@
       pintaGraficaTrayectoria();
     });
 
-    $('#selector-municipio-rapido').addEventListener('click', function (ev) {
+    escucha('#selector-municipio-rapido', 'click', function (ev) {
       var boton = ev.target.closest('[data-eleccion]');
       if (boton) seleccionaEleccion(boton.dataset.eleccion);
     });
 
-    var buscador = $('#buscador-seccion');
-    buscador.addEventListener('input', function (ev) {
+    escucha('#buscador-seccion', 'input', function (ev) {
       estado.busqueda = ev.target.value;
       pintaTabla();
       pintaCartografia();
     });
 
-    $('#boton-exportar').addEventListener('click', exportaCsv);
-    $('#boton-reporte').addEventListener('click', imprimeReporte);
-    $('#boton-precandidatos').addEventListener('click', abreModal);
-    $('#cerrar-modal').addEventListener('click', cierraModal);
-    $('#boton-registrar').addEventListener('click', registraPrecandidato);
-    $('#boton-exportar-monitoreo').addEventListener('click', exportaConfiguracionMonitoreo);
+    escucha('#boton-exportar', 'click', exportaCsv);
+    escucha('#boton-reporte', 'click', imprimeReporte);
+    escucha('#boton-precandidatos', 'click', abreModal);
+    escucha('#btn-cerrar-precandidatos', 'click', cierraModal);
+    escucha('#boton-registrar', 'click', registraPrecandidato);
+    escucha('#boton-exportar-monitoreo', 'click', exportaConfiguracionMonitoreo);
 
-    $('#modal-precandidatos').addEventListener('click', function (ev) {
+    escucha('#modal-precandidatos', 'click', function (ev) {
       if (ev.target === ev.currentTarget) cierraModal();
     });
     document.addEventListener('keydown', function (ev) {
@@ -2147,6 +2188,8 @@
 
   global.Tablero = {
     crear: crearTablero,
+    abrirModalPrecandidatos: abreModal,
+    cerrarModalPrecandidatos: cierraModal,
     estado: estado,
     utilidades: { entero: entero, decimal: decimal, pesos: pesos, porcentaje: porcentaje }
   };

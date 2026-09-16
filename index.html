@@ -39,7 +39,7 @@
       <p id="contexto-eleccion" class="text-sm" style="color: var(--texto-medio);">Cargando elección</p>
       <p id="contexto-corte" class="marca-linea">Corte pendiente</p>
     </div>
-    <button id="boton-precandidatos" type="button" class="boton no-imprimir">Precandidatos</button>
+    <button id="boton-precandidatos" type="button" class="boton no-imprimir">+ Gestionar precandidatos</button>
     <button id="boton-reporte" type="button" class="boton no-imprimir">Exportar reporte ejecutivo</button>
   </div>
 </header>
@@ -63,6 +63,7 @@
 <main id="tablero" class="contenedor" hidden>
 
   <div id="aviso-respaldo" class="aviso aviso-atencion mb-5" role="status" hidden></div>
+  <div id="aviso-tablero" class="aviso mb-5" role="status" hidden></div>
 
   <!-- Selectores: un mismo tablero sirve a cualquier cargo y territorio -->
   <section class="panel p-5 grid gap-4 md:grid-cols-4" aria-label="Selección de elección">
@@ -254,7 +255,7 @@
 </main>
 
 <!-- CRM de precandidatos -->
-<div id="modal-precandidatos" class="modal no-imprimir" role="dialog" aria-modal="true"
+<div id="modal-precandidatos" class="modal hidden no-imprimir" role="dialog" aria-modal="true"
      aria-labelledby="titulo-modal" hidden>
   <div class="modal-caja">
     <header class="modal-cabeza">
@@ -262,7 +263,9 @@
         <h2 class="panel-titulo" id="titulo-modal">Registrar y gestionar precandidaturas</h2>
         <p class="panel-nota">Cada registro entra al radar de su territorio y a la configuración de monitoreo</p>
       </div>
-      <button id="cerrar-modal" type="button" class="boton boton-sutil" aria-label="Cerrar">Cerrar</button>
+      <button id="btn-cerrar-precandidatos" type="button" class="boton boton-sutil"
+              aria-label="Cerrar el registro de precandidaturas"
+              onclick="if (window.Tablero) Tablero.cerrarModalPrecandidatos();">Cerrar</button>
     </header>
 
     <div class="modal-cuerpo">
